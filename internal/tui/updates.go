@@ -8,7 +8,7 @@ import (
 
 func (m Model) updateFilePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	
+
 	// Check if a file was selected
 	if didSelect, path := m.filepicker.DidSelectFile(msg); didSelect {
 		// A file was selected
@@ -16,13 +16,13 @@ func (m Model) updateFilePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = optimizerListState
 		return m, nil
 	}
-	
+
 	// Check if a disabled file was selected (wrong file type)
 	if didSelect, path := m.filepicker.DidSelectDisabledFile(msg); didSelect {
 		// Could show an error message here
 		_ = path // Ignore for now
 	}
-	
+
 	// Update the filepicker
 	m.filepicker, cmd = m.filepicker.Update(msg)
 	return m, cmd

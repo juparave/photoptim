@@ -2,13 +2,13 @@ package optimizer
 
 import (
 	"bytes"
-	"filepath"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
