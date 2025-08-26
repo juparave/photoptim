@@ -8,6 +8,7 @@ Photoptim is a fast and flexible tool for optimizing images. It supports various
 - Adjustable quality settings for JPEG compression
 - Batch processing of multiple images
 - CLI interface for easy usage
+- TUI (Terminal User Interface) for interactive usage
 
 ## Installation
 
@@ -27,17 +28,38 @@ go build -o photoptim cmd/photoptim/main.go
 
 ## Usage
 
-### Optimize a single image
+### Command Line Interface
+
+#### Optimize a single image
 
 ```bash
 photoptim optimize input.jpg output.jpg --quality 80
 ```
 
-### Batch optimize images
+#### Batch optimize images
 
 ```bash
 photoptim batch input_directory output_directory --quality 75
 ```
+
+### Terminal User Interface
+
+Photoptim also includes a TUI (Terminal User Interface) for interactive usage:
+
+```bash
+go run cmd/tui/main.go
+```
+
+Or build and run the TUI application:
+
+```bash
+go build -o photoptim-tui cmd/tui/main.go
+./photoptim-tui
+```
+
+See [TUI Usage Guide](TUI_USAGE.md) for detailed instructions on how to use the TUI.
+
+Note: The TUI application requires a proper terminal environment with /dev/tty access. It may not work in some IDEs or remote environments that don't provide full TTY support.
 
 ### Help
 
