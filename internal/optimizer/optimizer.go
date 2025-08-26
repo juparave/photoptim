@@ -1,73 +1,108 @@
 package optimizer
 
 import (
+	"bytes"
+	"filepath"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
+	"time"
 )
 
-// ImageOptimizer represents an image optimization tool
+// Optimizer interface (remote pipeline usage) - operates on in-memory bytes.
+type Optimizer interface {
+	OptimizeBytes(data []byte, format string, params Params) (out []byte, res Result, err error)
+}
+
+// Params holds format-specific optimization parameters.
+type Params struct {
+	JPEGQuality int
+}
+
+// Result describes optimization outcome.
+type Result struct {
+	OriginalSize  int64
+	OptimizedSize int64
+	Duration      time.Duration
+	Skipped       bool
+	Reason        string
+}
+
+// ImageOptimizer represents an image optimization tool (implements both legacy file API and new interface).
 type ImageOptimizer struct {
 	Quality int
 }
 
 // New creates a new ImageOptimizer with default settings
 func New() *ImageOptimizer {
-	return &ImageOptimizer{
-		Quality: 80, // Default quality
-	}
+	return &ImageOptimizer{Quality: 80}
 }
 
-// Optimize takes an input image path and optimizes it
-func (o *ImageOptimizer) Optimize(inputPath, outputPath string) error {
-	// Open the input file
-	file, err := os.Open(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to open input file: %w", err)
-	}
-	defer file.Close()
-
-	// Decode the image
-	img, format, err := image.Decode(file)
-	if err != nil {
-		return fmt.Errorf("failed to decode image: %w", err)
+// OptimizeBytes implements Optimizer interface.
+func (o *ImageOptimizer) OptimizeBytes(data []byte, format string, params Params) ([]byte, Result, error) {
+	start := time.Now()
+	r := Result{OriginalSize: int64(len(data))}
+	if params.JPEGQuality <= 0 {
+		params.JPEGQuality = o.Quality
 	}
 
-	// Create output file
-	outFile, err := os.Create(outputPath)
+	// Decode
+	img, decodeFormat, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		r.Skipped = true
+		r.Reason = "decode-error"
+		return nil, r, fmt.Errorf("decode: %w", err)
 	}
-	defer outFile.Close()
-
-	// Optimize based on format
+	if format == "" {
+		format = decodeFormat
+	}
+	buf := &bytes.Buffer{}
 	switch strings.ToLower(format) {
 	case "jpeg", "jpg":
-		options := &jpeg.Options{Quality: o.Quality}
-		err = jpeg.Encode(outFile, img, options)
+		if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: params.JPEGQuality}); err != nil {
+			return nil, r, err
+		}
 	case "png":
-		err = png.Encode(outFile, img)
+		if err := png.Encode(buf, img); err != nil {
+			return nil, r, err
+		}
 	default:
-		return fmt.Errorf("unsupported image format: %s", format)
+		r.Skipped = true
+		r.Reason = "unsupported-format"
+		return nil, r, fmt.Errorf("unsupported format: %s", format)
 	}
+	out := buf.Bytes()
+	r.OptimizedSize = int64(len(out))
+	r.Duration = time.Since(start)
+	return out, r, nil
+}
 
+// Optimize (legacy) takes an input image path and optimizes it to outputPath.
+func (o *ImageOptimizer) Optimize(inputPath, outputPath string) error {
+	file, err := os.Open(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to encode image: %w", err)
+		return fmt.Errorf("open input: %w", err)
 	}
-
-	// Get file info for reporting
-	inputInfo, _ := os.Stat(inputPath)
-	outputInfo, _ := os.Stat(outputPath)
-
-	fmt.Printf("Optimized %s (%d bytes) -> %s (%d bytes)\n",
-		filepath.Base(inputPath),
-		inputInfo.Size(),
-		filepath.Base(outputPath),
-		outputInfo.Size())
-
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read input: %w", err)
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(inputPath)), ".")
+	out, res, err := o.OptimizeBytes(data, ext, Params{JPEGQuality: o.Quality})
+	if err != nil && !res.Skipped {
+		return err
+	}
+	if res.Skipped {
+		return fmt.Errorf("skipped: %s", res.Reason)
+	}
+	if err := os.WriteFile(outputPath, out, 0o644); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	fmt.Printf("Optimized %s (%d bytes) -> %s (%d bytes)\n", filepath.Base(inputPath), res.OriginalSize, filepath.Base(outputPath), res.OptimizedSize)
 	return nil
 }
