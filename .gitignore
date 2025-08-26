@@ -1,0 +1,20 @@
+# Binaries
+photoptim
+*.exe
+*.exe~
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.log
+
+# Test data (we don't want to commit our test images)
+testdata/
+
+# Go workspace
+go.work
