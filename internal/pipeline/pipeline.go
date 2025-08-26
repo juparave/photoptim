@@ -47,8 +47,12 @@ type Orchestrator struct {
 func (o *Orchestrator) Run(ctx context.Context, tasks []FileTask) (<-chan ProgressEvent, <-chan error) {
 	prog := make(chan ProgressEvent)
 	errs := make(chan error, 1)
-	if o.Concurrency <= 0 { o.Concurrency = 1 }
-	if o.TinyThreshold == 0 { o.TinyThreshold = 15 * 1024 }
+	if o.Concurrency <= 0 {
+		o.Concurrency = 1
+	}
+	if o.TinyThreshold == 0 {
+		o.TinyThreshold = 15 * 1024
+	}
 	go func() {
 		defer close(prog)
 		defer close(errs)
@@ -59,35 +63,44 @@ func (o *Orchestrator) Run(ctx context.Context, tasks []FileTask) (<-chan Progre
 			wg.Add(1)
 			sem <- struct{}{}
 			go func() {
-				defer wg.Done(); defer func(){<-sem}()
-				select { case <-ctx.Done(): return; default: }
+				defer wg.Done()
+				defer func() { <-sem }()
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				rc, entry, err := o.FS.Open(ctx, task.Entry.Path)
 				if err != nil {
-					prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseDownload, Err:err, Done:true, Timestamp:time.Now()}
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseDownload, Err: err, Done: true, Timestamp: time.Now()}
 					return
 				}
 				data, err := io.ReadAll(rc)
 				_ = rc.Close()
 				if err != nil {
-					prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseDownload, Err:err, Done:true, Timestamp:time.Now()}
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseDownload, Err: err, Done: true, Timestamp: time.Now()}
 					return
 				}
-				prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseDownload, Bytes:int64(len(data)), Total:entry.Size, Done:true, Timestamp:time.Now()}
+				prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseDownload, Bytes: int64(len(data)), Total: entry.Size, Done: true, Timestamp: time.Now()}
 				// optimize
-				out, res, optErr := o.Opt.OptimizeBytes(data, detectFormat(task.Entry.Name), optimizer.Params{JPEGQuality:o.JPEGQuality})
+				out, res, optErr := o.Opt.OptimizeBytes(data, detectFormat(task.Entry.Name), optimizer.Params{JPEGQuality: o.JPEGQuality})
 				if res.Skipped || optErr != nil {
-					prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseOptimize, Bytes:res.OriginalSize, Total:res.OriginalSize, Done:true, Err:optErr, Timestamp:time.Now()}
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseOptimize, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Err: optErr, Timestamp: time.Now()}
 					return
 				}
-				prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseOptimize, Bytes:res.OriginalSize, Total:res.OriginalSize, Done:true, Timestamp:time.Now()}
+				prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseOptimize, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Timestamp: time.Now()}
 				wc, err := o.FS.Create(ctx, task.Entry.Path, true)
 				if err != nil {
-					prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseUpload, Done:true, Err:err, Timestamp:time.Now()}
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Done: true, Err: err, Timestamp: time.Now()}
 					return
 				}
-				if _, err := wc.Write(out); err != nil { _ = wc.Close(); prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseUpload, Done:true, Err:err, Timestamp:time.Now()}; return }
+				if _, err := wc.Write(out); err != nil {
+					_ = wc.Close()
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Done: true, Err: err, Timestamp: time.Now()}
+					return
+				}
 				_ = wc.Close()
-				prog <- ProgressEvent{FileID:i, Name:task.Entry.Name, Phase:PhaseUpload, Bytes:int64(len(out)), Total:int64(len(out)), Done:true, Timestamp:time.Now()}
+				prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Bytes: int64(len(out)), Total: int64(len(out)), Done: true, Timestamp: time.Now()}
 			}()
 		}
 		wg.Wait()
@@ -96,7 +109,10 @@ func (o *Orchestrator) Run(ctx context.Context, tasks []FileTask) (<-chan Progre
 }
 
 func detectFormat(name string) string {
-	for i := len(name)-1; i>=0; i-- { if name[i]=='.' { return name[i+1:] } }
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '.' {
+			return name[i+1:]
+		}
+	}
 	return ""
 }
-
