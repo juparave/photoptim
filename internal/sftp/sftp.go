@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"strings"
 	"time"
 
 	pkgsftp "github.com/pkg/sftp"
@@ -60,10 +61,15 @@ func (c *Client) Connect(ctx context.Context, cfg remotefs.ConnectionConfig) err
 	}
 	c.sftpClient = s
 
-	// Normalize root (ensure exists)
+	// Determine chroot: user-specified path OR user's home (working directory) by default
+	wd, wdErr := s.Getwd()
 	root := cfg.RemotePath
-	if root == "" {
-		root = "/"
+	if root == "" || root == "/" {
+		if wdErr == nil && wd != "" {
+			root = wd
+		} else {
+			root = "/"
+		}
 	}
 	c.root = root
 	return nil
@@ -135,7 +141,16 @@ func (c *Client) abs(p string) string {
 	if filepath.IsAbs(p) {
 		return p
 	}
-	return filepath.Clean(filepath.Join(c.root, p))
+	if p == "" || p == "." {
+		return c.root
+	}
+	// Force relative to chroot
+	if filepath.IsAbs(p) {
+		p = strings.TrimPrefix(p, "/")
+	}
+	full := filepath.Join(c.root, p)
+	clean := filepath.Clean(full)
+	return clean
 }
 
 // hostKeyCallback returns a callback that prompts the user (placeholder now always accepts).
