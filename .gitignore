@@ -1,5 +1,6 @@
 # Binaries
-photoptim
+/photoptim
+/photoptim-tui
 *.exe
 *.exe~
 
@@ -14,7 +15,8 @@ photoptim
 *.log
 
 # Test data (we don't want to commit our test images)
-testdata/
+/testdata/
 
 # Go workspace
 go.work
+.DS_Store
