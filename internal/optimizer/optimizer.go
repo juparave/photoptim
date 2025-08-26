@@ -63,10 +63,10 @@ func (o *ImageOptimizer) Optimize(inputPath, outputPath string) error {
 	inputInfo, _ := os.Stat(inputPath)
 	outputInfo, _ := os.Stat(outputPath)
 
-	fmt.Printf("Optimized %s (%d bytes) -> %s (%d bytes)\n", 
-		filepath.Base(inputPath), 
-		inputInfo.Size(), 
-		filepath.Base(outputPath), 
+	fmt.Printf("Optimized %s (%d bytes) -> %s (%d bytes)\n",
+		filepath.Base(inputPath),
+		inputInfo.Size(),
+		filepath.Base(outputPath),
 		outputInfo.Size())
 
 	return nil

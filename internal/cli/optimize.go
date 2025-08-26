@@ -3,8 +3,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"photoptim/internal/optimizer"
+
+	"github.com/spf13/cobra"
 )
 
 var optimizeCmd = &cobra.Command{

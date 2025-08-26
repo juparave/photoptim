@@ -5,8 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"photoptim/internal/optimizer"
+
+	"github.com/spf13/cobra"
 )
 
 var batchCmd = &cobra.Command{
