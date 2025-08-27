@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"path"
 	"strconv"
 	"strings"
@@ -18,11 +19,58 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	docStyle = lipgloss.NewStyle().Padding(1, 2)
-)
+var docStyle = lipgloss.NewStyle().Padding(1, 2)
 
-// NOTE: item and itemDelegate definitions are in item.go
+// sftpItem represents a file or directory in the SFTP list.
+type sftpItem struct {
+	name  string
+	isDir bool
+}
+
+func (i sftpItem) FilterValue() string { return i.name }
+func (i sftpItem) Description() string { return "" }
+func (i sftpItem) Title() string {
+	icon := fileIcon
+	if i.isDir {
+		icon = directoryIcon
+	}
+	return fmt.Sprintf("%s %s", icon, i.name)
+}
+
+// sftpItemDelegate handles rendering SFTP list items.
+type sftpItemDelegate struct {
+	model *SFTPModel
+}
+
+func (d sftpItemDelegate) Height() int {
+	return 1
+}
+
+func (d sftpItemDelegate) Spacing() int {
+	return 0
+}
+
+func (d sftpItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(sftpItem)
+	if !ok {
+		return
+	}
+
+	str := i.Title()
+
+	fn := itemStyle.Render
+	if index == m.Index() {
+		fn = func(s ...string) string {
+			return selectedItemStyle.Render("> " + s[0])
+		}
+	}
+
+	fmt.Fprint(w, fn(str))
+}
 
 // SFTPState represents the current view of the SFTP TUI.
 type SFTPState int
@@ -49,10 +97,12 @@ type SFTPModel struct {
 }
 
 // --- Bubble Tea Messages ---
-type sftpConnectSuccessMsg struct{ client *sftpfs.Client }
-type sftpConnectErrorMsg struct{ err error }
-type filesListedMsg struct{ files []list.Item }
-type fileListErrorMsg struct{ err error }
+type (
+	sftpConnectSuccessMsg struct{ client *sftpfs.Client }
+	sftpConnectErrorMsg   struct{ err error }
+	filesListedMsg        struct{ files []list.Item }
+	fileListErrorMsg      struct{ err error }
+)
 
 // --- Bubble Tea Commands ---
 
@@ -87,7 +137,7 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 
 		items := make([]list.Item, len(entries))
 		for i, entry := range entries {
-			items[i] = item{name: entry.Name, isDir: entry.IsDir}
+			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir}
 		}
 		return filesListedMsg{items}
 	}
@@ -96,9 +146,16 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 // --- Model Initialization and Methods ---
 
 func NewSFTPModel() SFTPModel {
+	m := SFTPModel{
+		state:       ConnectionState,
+		focusIndex:  0,
+		currentPath: ".",
+	}
+
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	m.spinner = s
 
 	var inputs []textinput.Model = make([]textinput.Model, 5)
 	inputs[0] = textinput.New()
@@ -130,26 +187,21 @@ func NewSFTPModel() SFTPModel {
 	inputs[4].CharLimit = 256
 	inputs[4].Width = 30
 	inputs[4].SetValue("/")
+	m.inputs = inputs
 
-	l := list.New([]list.Item{}, itemDelegate{}, 0, 0)
+	l := list.New([]list.Item{}, sftpItemDelegate{model: &m}, 0, 0)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
+	m.fileList = l
 
-	return SFTPModel{
-		state:       ConnectionState,
-		inputs:      inputs,
-		focusIndex:  0,
-		spinner:     s,
-		fileList:    l,
-		currentPath: ".",
-	}
+	return m
 }
 
 func (m SFTPModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (m SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -200,7 +252,9 @@ func (m SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionState:
 		return m.updateConnection(msg)
 	case BrowserState:
-		m.fileList, cmd = m.fileList.Update(msg)
+		fileList, newCmd := m.fileList.Update(msg)
+		m.fileList = fileList
+		cmd = newCmd
 		return m, cmd
 	}
 
@@ -224,7 +278,7 @@ func (m SFTPModel) View() string {
 	}
 }
 
-func (m SFTPModel) updateConnection(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *SFTPModel) updateConnection(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -247,13 +301,13 @@ func (m SFTPModel) updateConnection(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "enter":
-			i, ok := m.fileList.SelectedItem().(item)
+			i, ok := m.fileList.SelectedItem().(sftpItem)
 			if ok && i.isDir {
 				m.currentPath = path.Join(m.currentPath, i.name)
 				m.loading = true
@@ -270,7 +324,9 @@ func (m SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.fileList, cmd = m.fileList.Update(msg)
+	fileList, newCmd := m.fileList.Update(msg)
+	m.fileList = fileList
+	cmd = newCmd
 	return m, cmd
 }
 

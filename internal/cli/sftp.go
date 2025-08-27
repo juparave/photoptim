@@ -62,7 +62,7 @@ var sftpCmd = &cobra.Command{
 		} else {
 			// Interactive TUI mode
 			model := tui.NewSFTPModel()
-			program := tea.NewProgram(model)
+			program := tea.NewProgram(&model)
 
 			// Run the program
 			if _, err := program.Run(); err != nil {
