@@ -1,4 +1,4 @@
-module photoptim
+module github.com/juparave/photoptim
 
 go 1.24.2
 
