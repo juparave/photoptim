@@ -4,6 +4,12 @@ All notable changes to Photoptim will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.1.1] - 2025-08-27
+
+### Fixed
+- Corrected `go install` instructions in `README.md`.
+- Fixed module path in `go.mod` to align with the GitHub repository path.
+
 ## [v0.1.0] - 2025-08-27
 
 ### Added

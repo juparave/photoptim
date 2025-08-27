@@ -16,11 +16,19 @@ Photoptim is a fast and flexible tool for optimizing images. It supports various
 
 ## Installation
 
-To install Photoptim, you need to have Go installed on your system. Then run:
+To install Photoptim, you need to have Go installed on your system. This project provides two commands: the main `photoptim` CLI and an interactive `photoptim-tui`.
+
+You can install both using `go install`:
 
 ```bash
-go install github.com/juparave/photoptim@latest
+# To install the main CLI tool
+go install github.com/juparave/photoptim/cmd/photoptim@latest
+
+# To install the TUI (Terminal User Interface)
+go install github.com/juparave/photoptim/cmd/tui@latest
 ```
+
+**Note:** The TUI will be installed with the name `tui`. You can rename it to `photoptim-tui` for clarity.
 
 Or clone this repository and build it locally:
 
