@@ -37,7 +37,7 @@ func (i sftpItem) Title() string {
 		icon = directoryIcon
 		return fmt.Sprintf("%s %s", icon, i.name)
 	}
-	
+
 	sizeStr := formatFileSize(i.size)
 	return fmt.Sprintf("%s %-30s %s", icon, i.name, sizeStr)
 }
@@ -78,6 +78,15 @@ func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 	}
 
 	str := i.Title()
+
+	// Add selection checkbox for files (not directories)
+	if !i.isDir {
+		selected := "[ ]"
+		if d.model.isFileSelected(i.name) {
+			selected = "[x]"
+		}
+		str = fmt.Sprintf("%s %s", selected, str)
+	}
 
 	fn := itemStyle.Render
 	if index == m.Index() {
@@ -126,8 +135,9 @@ type SFTPModel struct {
 	width, height int
 	sortMode      SortMode
 
-	sftpClient *sftpfs.Client
-	fileList   list.Model
+	sftpClient    *sftpfs.Client
+	fileList      list.Model
+	selectedFiles map[string]struct{}
 }
 
 // --- Bubble Tea Messages ---
@@ -169,18 +179,26 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 			return fileListErrorMsg{err}
 		}
 
-		items := make([]sftpItem, len(entries))
-		for i, entry := range entries {
+		// Filter out hidden files (dotfiles)
+		var filteredEntries []remotefs.RemoteEntry
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name, ".") {
+				filteredEntries = append(filteredEntries, entry)
+			}
+		}
+
+		items := make([]sftpItem, len(filteredEntries))
+		for i, entry := range filteredEntries {
 			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir, size: entry.Size}
 		}
-		
+
 		// Sort items: directories first, then by sort mode
 		sort.Slice(items, func(i, j int) bool {
 			// Directories always come first
 			if items[i].isDir != items[j].isDir {
 				return items[i].isDir
 			}
-			
+
 			// Within same type (dir/file), sort by mode
 			switch m.sortMode {
 			case SortBySize:
@@ -194,7 +212,7 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 				return items[i].name < items[j].name
 			}
 		})
-		
+
 		listItems := make([]list.Item, len(items))
 		for i, item := range items {
 			listItems[i] = item
@@ -207,9 +225,10 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 
 func NewSFTPModel() SFTPModel {
 	m := SFTPModel{
-		state:       ConnectionState,
-		focusIndex:  0,
-		currentPath: ".",
+		state:         ConnectionState,
+		focusIndex:    0,
+		currentPath:   ".",
+		selectedFiles: make(map[string]struct{}),
 	}
 
 	s := spinner.New()
@@ -373,6 +392,16 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case " ":
+			// Handle spacebar for file selection
+			i, ok := m.fileList.SelectedItem().(sftpItem)
+			if ok && !i.isDir {
+				m.toggleFileSelection(i.name)
+				// Refresh the list to show updated selection
+				items := m.fileList.Items()
+				m.fileList.SetItems(items)
+			}
+			return m, nil
 		case "enter":
 			i, ok := m.fileList.SelectedItem().(sftpItem)
 			if ok && i.isDir {
@@ -381,7 +410,7 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("Loading %s...", m.currentPath)
 				return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
 			}
-		case "backspace":
+		case "backspace", "left":
 			if m.currentPath != "." {
 				m.currentPath = path.Dir(m.currentPath)
 				m.loading = true
@@ -401,6 +430,7 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// For all other messages, update the file list
 	fileList, newCmd := m.fileList.Update(msg)
 	m.fileList = fileList
 	cmd = newCmd
@@ -454,4 +484,30 @@ func (m SFTPModel) connectionView() string {
 	b.WriteString("(q to quit, tab to navigate)\n")
 
 	return docStyle.Render(b.String())
+}
+
+// toggleFileSelection toggles the selection state of a file
+func (m *SFTPModel) toggleFileSelection(filename string) {
+	filePath := path.Join(m.currentPath, filename)
+	if _, ok := m.selectedFiles[filePath]; ok {
+		delete(m.selectedFiles, filePath)
+	} else {
+		m.selectedFiles[filePath] = struct{}{}
+	}
+}
+
+// isFileSelected checks if a file is currently selected
+func (m *SFTPModel) isFileSelected(filename string) bool {
+	filePath := path.Join(m.currentPath, filename)
+	_, ok := m.selectedFiles[filePath]
+	return ok
+}
+
+// getSelectedFiles returns a slice of all selected file paths
+func (m *SFTPModel) getSelectedFiles() []string {
+	files := make([]string, 0, len(m.selectedFiles))
+	for file := range m.selectedFiles {
+		files = append(files, file)
+	}
+	return files
 }
