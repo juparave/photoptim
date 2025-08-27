@@ -16,6 +16,7 @@ import (
 	sftpfs "photoptim/internal/sftp"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -147,6 +148,16 @@ type SFTPModel struct {
 	sftpClient    *sftpfs.Client
 	fileList      list.Model
 	selectedFiles map[string]struct{}
+	
+	// Progress tracking for optimization
+	progress            progress.Model
+	optimizing          bool
+	optimizationResults []string
+	currentFile         string
+	filesProcessed      int
+	totalFiles          int
+	optimizedCount      int
+	failedCount         int
 }
 
 // --- Bubble Tea Messages ---
@@ -155,8 +166,12 @@ type (
 	sftpConnectErrorMsg   struct{ err error }
 	filesListedMsg        struct{ files []list.Item }
 	fileListErrorMsg      struct{ err error }
-	optimizationCompleteMsg struct{ optimized int; failed int }
+	optimizationCompleteMsg struct{ optimized int; failed int; results []string }
 	optimizationErrorMsg    struct{ err error }
+	optimizationProgressMsg struct{ current int; total int; filename string; result string }
+	startOptimizationMsg    struct{ files []string }
+	optimizeFileMsg         struct{ filePath string; index int; total int }
+	fileOptimizedMsg        struct{ result string; success bool }
 )
 
 // --- Bubble Tea Commands ---
@@ -236,68 +251,98 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 	}
 }
 
-func (m SFTPModel) optimizeSelectedFiles() tea.Cmd {
+func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cmd {
 	return func() tea.Msg {
+		filename := filepath.Base(filePath)
+
 		if m.sftpClient == nil {
-			return optimizationErrorMsg{err: fmt.Errorf("no SFTP connection")}
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: no SFTP connection", filename),
+				success: false,
+			}
 		}
 
 		ctx := context.Background()
 		opt := optimizer.New()
 		opt.Quality = 80 // default quality
 
-		optimized := 0
-		failed := 0
-
-		for filePath := range m.selectedFiles {
-			// Open and read the file
-			reader, _, err := m.sftpClient.Open(ctx, filePath)
-			if err != nil {
-				failed++
-				continue
+		// Open and read the file
+		reader, _, err := m.sftpClient.Open(ctx, filePath)
+		if err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: failed to open (%v)", filename, err),
+				success: false,
 			}
-
-			data, err := io.ReadAll(reader)
-			reader.Close()
-			if err != nil {
-				failed++
-				continue
-			}
-
-			// Get file extension for format detection
-			ext := strings.ToLower(filepath.Ext(filePath))
-			if ext == "" {
-				failed++
-				continue
-			}
-
-			// Optimize the image data
-			optimizedData, _, err := opt.OptimizeBytes(data, ext, optimizer.Params{JPEGQuality: opt.Quality})
-			if err != nil {
-				failed++
-				continue
-			}
-
-			// Write the optimized data back (overwrite existing file)
-			writer, err := m.sftpClient.Create(ctx, filePath, true)
-			if err != nil {
-				failed++
-				continue
-			}
-
-			_, err = writer.Write(optimizedData)
-			writer.Close()
-			if err != nil {
-				failed++
-				continue
-			}
-
-			optimized++
 		}
 
-		return optimizationCompleteMsg{optimized: optimized, failed: failed}
+		data, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: failed to read (%v)", filename, err),
+				success: false,
+			}
+		}
+
+		// Get file extension for format detection
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if ext == "" || (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp") {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: unsupported format (%s)", filename, ext),
+				success: false,
+			}
+		}
+
+		// Optimize the image data
+		optimizedData, res, err := opt.OptimizeBytes(data, ext, optimizer.Params{JPEGQuality: opt.Quality})
+		if err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: optimization failed (%v)", filename, err),
+				success: false,
+			}
+		}
+
+		// Use optimizer result data for accurate reporting
+		originalSize := res.OriginalSize
+		optimizedSize := res.OptimizedSize
+
+		// Write the optimized data back (overwrite existing file)
+		writer, err := m.sftpClient.Create(ctx, filePath, true)
+		if err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: failed to create output file (%v)", filename, err),
+				success: false,
+			}
+		}
+
+		_, err = writer.Write(optimizedData)
+		writer.Close()
+		if err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: failed to write (%v)", filename, err),
+				success: false,
+			}
+		}
+
+		// Check if we actually achieved compression
+		if optimizedSize >= originalSize {
+			return fileOptimizedMsg{
+				result: fmt.Sprintf("⚠️  %s: %s -> %s (no compression)", filename,
+					formatFileSize(originalSize), formatFileSize(optimizedSize)),
+				success: true,
+			}
+		} else {
+			savings := originalSize - optimizedSize
+			savingsPercent := float64(savings) / float64(originalSize) * 100
+			return fileOptimizedMsg{
+				result: fmt.Sprintf("✅ %s: %s -> %s (%.1f%% saved)", filename,
+					formatFileSize(originalSize), formatFileSize(optimizedSize), savingsPercent),
+				success: true,
+			}
+		}
 	}
 }
+
 
 // --- Model Initialization and Methods ---
 
@@ -351,6 +396,10 @@ func NewSFTPModel() SFTPModel {
 	l.SetFilteringEnabled(false)
 	m.fileList = l
 
+	// Initialize progress bar
+	p := progress.New(progress.WithDefaultGradient())
+	m.progress = p
+
 	return m
 }
 
@@ -397,19 +446,76 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
-	case optimizationCompleteMsg:
-		m.loading = false
-		if msg.failed > 0 {
-			m.status = fmt.Sprintf("Optimization complete: %d optimized, %d failed", msg.optimized, msg.failed)
-		} else {
-			m.status = fmt.Sprintf("Optimization complete: %d files optimized successfully", msg.optimized)
+	case startOptimizationMsg:
+		m.optimizing = true
+		m.optimizationResults = []string{}
+		m.filesProcessed = 0
+		m.totalFiles = len(msg.files)
+		m.optimizedCount = 0
+		m.failedCount = 0
+		m.currentFile = ""
+		m.progress.SetPercent(0)
+		m.status = "Starting optimization..."
+		
+		// Start processing the first file
+		if len(msg.files) > 0 {
+			return m, m.optimizeFileCmd(msg.files[0], 0, len(msg.files))
 		}
-		// Clear selections after successful optimization
-		m.selectedFiles = make(map[string]struct{})
-		return m, m.listFilesCmd() // Refresh the file list
+		return m, nil
+
+	case fileOptimizedMsg:
+		m.filesProcessed++
+		if msg.success {
+			m.optimizedCount++
+		} else {
+			m.failedCount++
+		}
+		
+		// Add result
+		m.optimizationResults = append(m.optimizationResults, msg.result)
+		
+		// Update progress
+		progressPercent := float64(m.filesProcessed) / float64(m.totalFiles)
+		cmd = m.progress.SetPercent(progressPercent)
+		
+		// Check if we're done
+		if m.filesProcessed >= m.totalFiles {
+			m.loading = false
+			m.optimizing = false
+			if m.failedCount > 0 {
+				m.status = fmt.Sprintf("Optimization complete: %d optimized, %d failed", m.optimizedCount, m.failedCount)
+			} else {
+				m.status = fmt.Sprintf("Optimization complete: %d files optimized successfully", m.optimizedCount)
+			}
+			// Clear selections after successful optimization
+			m.selectedFiles = make(map[string]struct{})
+			return m, tea.Batch(cmd, m.listFilesCmd()) // Refresh the file list
+		} else {
+			// Process next file
+			files := make([]string, 0, len(m.selectedFiles))
+			for filePath := range m.selectedFiles {
+				files = append(files, filePath)
+			}
+			if m.filesProcessed < len(files) {
+				return m, tea.Batch(cmd, m.optimizeFileCmd(files[m.filesProcessed], m.filesProcessed, len(files)))
+			}
+		}
+		return m, cmd
+
+	case optimizationProgressMsg:
+		m.currentFile = msg.filename
+		progressPercent := float64(msg.current-1) / float64(msg.total)
+		cmd = m.progress.SetPercent(progressPercent)
+		m.status = fmt.Sprintf("Optimizing %s (%d/%d)", msg.filename, msg.current, msg.total)
+		return m, cmd
+
+	case optimizationCompleteMsg:
+		// This is now handled by fileOptimizedMsg
+		return m, nil
 
 	case optimizationErrorMsg:
 		m.loading = false
+		m.optimizing = false
 		m.err = msg.err
 		return m, nil
 
@@ -443,12 +549,47 @@ func (m SFTPModel) View() string {
 	}
 
 	if m.loading {
-		return fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), m.status)
+		if m.optimizing {
+			// Show optimization progress
+			var content strings.Builder
+			content.WriteString(fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), m.status))
+			
+			// Show progress bar
+			content.WriteString(m.progress.View())
+			content.WriteString("\n\n")
+			
+			// Show recent results (last 3)
+			if len(m.optimizationResults) > 0 {
+				content.WriteString("Recent results:\n")
+				start := 0
+				if len(m.optimizationResults) > 3 {
+					start = len(m.optimizationResults) - 3
+				}
+				for i := start; i < len(m.optimizationResults); i++ {
+					content.WriteString(fmt.Sprintf("  %s\n", m.optimizationResults[i]))
+				}
+				content.WriteString("\n")
+			}
+			
+			return docStyle.Render(content.String())
+		} else {
+			return fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), m.status)
+		}
 	}
 
 	switch m.state {
 	case BrowserState:
-		return docStyle.Render(m.fileList.View())
+		content := m.fileList.View()
+		
+		// Show optimization results if available
+		if len(m.optimizationResults) > 0 && !m.loading {
+			content += "\n\nOptimization Results:\n"
+			for _, result := range m.optimizationResults {
+				content += fmt.Sprintf("  %s\n", result)
+			}
+		}
+		
+		return docStyle.Render(content)
 	default:
 		return m.connectionView()
 	}
@@ -503,9 +644,14 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
 			} else if len(m.selectedFiles) > 0 {
 				// Start optimization of selected files
+				files := make([]string, 0, len(m.selectedFiles))
+				for filePath := range m.selectedFiles {
+					files = append(files, filePath)
+				}
 				m.loading = true
-				m.status = "Optimizing selected files..."
-				return m, tea.Batch(m.spinner.Tick, m.optimizeSelectedFiles())
+				return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
+					return startOptimizationMsg{files: files}
+				})
 			}
 		case "backspace", "left":
 			if m.currentPath != "." {
