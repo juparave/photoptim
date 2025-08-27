@@ -13,7 +13,7 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 
-	"photoptim/internal/remotefs"
+	"github.com/juparave/photoptim/internal/remotefs"
 )
 
 // Client implements remotefs.RemoteFS over SFTP.

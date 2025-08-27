@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"photoptim/internal/optimizer"
-	"photoptim/internal/remotefs"
+	"github.com/juparave/photoptim/internal/optimizer"
+	"github.com/juparave/photoptim/internal/remotefs"
 )
 
 type Phase string

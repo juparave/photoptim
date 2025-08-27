@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"photoptim/internal/tui"
-
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/juparave/photoptim/internal/tui"
 )
 
 func main() {

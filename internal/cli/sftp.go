@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"photoptim/internal/remotefs"
-	sftpfs "photoptim/internal/sftp"
-	"photoptim/internal/tui"
+	"github.com/juparave/photoptim/internal/remotefs"
+	sftpfs "github.com/juparave/photoptim/internal/sftp"
+	"github.com/juparave/photoptim/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -79,6 +79,7 @@ func prompt(r *bufio.Reader, label string) string {
 	txt, _ := r.ReadString('\n')
 	return strings.TrimSpace(txt)
 }
+
 func promptDefault(r *bufio.Reader, label, def string) string {
 	fmt.Print(label)
 	txt, _ := r.ReadString('\n')

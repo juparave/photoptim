@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"photoptim/internal/optimizer"
+	"github.com/juparave/photoptim/internal/optimizer"
 
 	"github.com/spf13/cobra"
 )

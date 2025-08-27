@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"photoptim/internal/cli"
+	"github.com/juparave/photoptim/internal/cli"
 )
 
 func main() {

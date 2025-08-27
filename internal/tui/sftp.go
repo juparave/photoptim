@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"photoptim/internal/optimizer"
-	"photoptim/internal/remotefs"
-	sftpfs "photoptim/internal/sftp"
+	"github.com/juparave/photoptim/internal/optimizer"
+	"github.com/juparave/photoptim/internal/remotefs"
+	sftpfs "github.com/juparave/photoptim/internal/sftp"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"

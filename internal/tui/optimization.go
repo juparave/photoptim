@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"photoptim/internal/optimizer"
+	"github.com/juparave/photoptim/internal/optimizer"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

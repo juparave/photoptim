@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"photoptim/internal/optimizer"
+	"github.com/juparave/photoptim/internal/optimizer"
 
 	"github.com/spf13/cobra"
 )
