@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ var docStyle = lipgloss.NewStyle().Padding(1, 2)
 type sftpItem struct {
 	name  string
 	isDir bool
+	size  int64
 }
 
 func (i sftpItem) FilterValue() string { return i.name }
@@ -33,8 +35,23 @@ func (i sftpItem) Title() string {
 	icon := fileIcon
 	if i.isDir {
 		icon = directoryIcon
+		return fmt.Sprintf("%s %s", icon, i.name)
 	}
-	return fmt.Sprintf("%s %s", icon, i.name)
+	
+	sizeStr := formatFileSize(i.size)
+	return fmt.Sprintf("%s %-30s %s", icon, i.name, sizeStr)
+}
+
+func formatFileSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%dB", size)
+	} else if size < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(size)/1024)
+	} else if size < 1024*1024*1024 {
+		return fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
+	} else {
+		return fmt.Sprintf("%.1fGB", float64(size)/(1024*1024*1024))
+	}
 }
 
 // sftpItemDelegate handles rendering SFTP list items.
@@ -67,6 +84,11 @@ func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 		fn = func(s ...string) string {
 			return selectedItemStyle.Render("> " + s[0])
 		}
+	} else if !i.isDir && i.size > sizeThresholdMB*1024*1024 {
+		// Highlight large files
+		fn = func(s ...string) string {
+			return largeFileStyle.Render(s[0])
+		}
 	}
 
 	fmt.Fprint(w, fn(str))
@@ -80,6 +102,17 @@ const (
 	BrowserState
 )
 
+type SortMode int
+
+const (
+	SortByName SortMode = iota
+	SortBySize
+)
+
+const (
+	sizeThresholdMB = 10 // Highlight files larger than 10MB
+)
+
 // SFTPModel is the main model for the SFTP TUI.
 type SFTPModel struct {
 	state         SFTPState
@@ -91,6 +124,7 @@ type SFTPModel struct {
 	currentPath   string
 	err           error
 	width, height int
+	sortMode      SortMode
 
 	sftpClient *sftpfs.Client
 	fileList   list.Model
@@ -135,11 +169,37 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 			return fileListErrorMsg{err}
 		}
 
-		items := make([]list.Item, len(entries))
+		items := make([]sftpItem, len(entries))
 		for i, entry := range entries {
-			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir}
+			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir, size: entry.Size}
 		}
-		return filesListedMsg{items}
+		
+		// Sort items: directories first, then by sort mode
+		sort.Slice(items, func(i, j int) bool {
+			// Directories always come first
+			if items[i].isDir != items[j].isDir {
+				return items[i].isDir
+			}
+			
+			// Within same type (dir/file), sort by mode
+			switch m.sortMode {
+			case SortBySize:
+				if items[i].isDir {
+					// Sort directories by name
+					return items[i].name < items[j].name
+				}
+				// Sort files by size (descending)
+				return items[i].size > items[j].size
+			default: // SortByName
+				return items[i].name < items[j].name
+			}
+		})
+		
+		listItems := make([]list.Item, len(items))
+		for i, item := range items {
+			listItems[i] = item
+		}
+		return filesListedMsg{listItems}
 	}
 }
 
@@ -232,7 +292,11 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case filesListedMsg:
 		m.loading = false
 		m.fileList.SetItems(msg.files)
-		m.fileList.Title = fmt.Sprintf("Remote Files: %s", m.currentPath)
+		sortModeStr := "name"
+		if m.sortMode == SortBySize {
+			sortModeStr = "size"
+		}
+		m.fileList.Title = fmt.Sprintf("Remote Files: %s (sorted by %s) - Press 's' to toggle sort", m.currentPath, sortModeStr)
 		return m, nil
 
 	case fileListErrorMsg:
@@ -324,6 +388,16 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("Loading %s...", m.currentPath)
 				return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
 			}
+		case "s":
+			// Toggle sort mode
+			if m.sortMode == SortByName {
+				m.sortMode = SortBySize
+			} else {
+				m.sortMode = SortByName
+			}
+			m.loading = true
+			m.status = "Resorting files..."
+			return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
 		}
 	}
 

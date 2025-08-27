@@ -13,6 +13,7 @@ import (
 var (
 	itemStyle         = lipgloss.NewStyle().PaddingLeft(4)
 	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+	largeFileStyle    = lipgloss.NewStyle().PaddingLeft(4).Foreground(lipgloss.Color("208")) // Orange for large files
 	fileIcon          = "\U0001F4C4" // 📄
 	directoryIcon     = "\U0001F4C1" // 📁
 )
