@@ -294,6 +294,9 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 	return func() tea.Msg {
 		filename := filepath.Base(filePath)
 
+		// Note: Progress updates would need to be sent as separate commands,
+		// but the current architecture runs optimization synchronously.
+
 		if m.sftpClient == nil {
 			return fileOptimizedMsg{
 				result:  fmt.Sprintf("❌ %s: no SFTP connection", filename),
@@ -550,6 +553,7 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progressPercent := float64(msg.current-1) / float64(msg.total)
 		cmd = m.progress.SetPercent(progressPercent)
 		m.status = fmt.Sprintf("Optimizing %s (%d/%d)", msg.filename, msg.current, msg.total)
+
 		return m, cmd
 
 	case optimizationCompleteMsg:
