@@ -10,7 +10,6 @@ require (
 	github.com/spf13/cobra v1.9.1
 	go.etcd.io/bbolt v1.3.9
 	golang.org/x/crypto v0.31.0
-	golang.org/x/term v0.27.0
 )
 
 require (
