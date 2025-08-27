@@ -211,6 +211,12 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileList.SetSize(m.width-4, m.height-4)
 		return m, nil
 
+	case spinner.TickMsg:
+		if m.loading {
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+
 	case sftpConnectSuccessMsg:
 		m.sftpClient = msg.client
 		m.state = BrowserState
@@ -252,10 +258,7 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionState:
 		return m.updateConnection(msg)
 	case BrowserState:
-		fileList, newCmd := m.fileList.Update(msg)
-		m.fileList = fileList
-		cmd = newCmd
-		return m, cmd
+		return m.updateBrowser(msg)
 	}
 
 	return m, nil
