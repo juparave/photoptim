@@ -18,7 +18,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var docStyle = lipgloss.NewStyle().Padding(1, 2)
+var (
+	docStyle = lipgloss.NewStyle().Padding(1, 2)
+)
 
 // NOTE: item and itemDelegate definitions are in item.go
 
@@ -38,21 +40,19 @@ type SFTPModel struct {
 	spinner       spinner.Model
 	loading       bool
 	status        string
+	currentPath   string
 	err           error
 	width, height int
 
-	sftpClient  *sftpfs.Client
-	fileList    list.Model
-	currentPath string
+	sftpClient *sftpfs.Client
+	fileList   list.Model
 }
 
 // --- Bubble Tea Messages ---
-type (
-	sftpConnectSuccessMsg struct{ client *sftpfs.Client }
-	sftpConnectErrorMsg   struct{ err error }
-	filesListedMsg        struct{ files []list.Item }
-	fileListErrorMsg      struct{ err error }
-)
+type sftpConnectSuccessMsg struct{ client *sftpfs.Client }
+type sftpConnectErrorMsg struct{ err error }
+type filesListedMsg struct{ files []list.Item }
+type fileListErrorMsg struct{ err error }
 
 // --- Bubble Tea Commands ---
 
@@ -61,9 +61,10 @@ func (m SFTPModel) connectCmd() tea.Cmd {
 		host := m.inputs[0].Value()
 		port, _ := strconv.Atoi(m.inputs[1].Value())
 		user := m.inputs[2].Value()
-		remotePath := m.inputs[3].Value()
+		password := m.inputs[3].Value()
+		remotePath := m.inputs[4].Value()
 
-		cfg := remotefs.ConnectionConfig{Host: host, Port: port, User: user, RemotePath: remotePath}
+		cfg := remotefs.ConnectionConfig{Host: host, Port: port, User: user, Password: password, RemotePath: remotePath}
 		client := &sftpfs.Client{}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -99,7 +100,7 @@ func NewSFTPModel() SFTPModel {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
-	var inputs []textinput.Model = make([]textinput.Model, 4)
+	var inputs []textinput.Model = make([]textinput.Model, 5)
 	inputs[0] = textinput.New()
 	inputs[0].Placeholder = "sftp.example.com"
 	inputs[0].Focus()
@@ -118,10 +119,17 @@ func NewSFTPModel() SFTPModel {
 	inputs[2].Width = 20
 
 	inputs[3] = textinput.New()
-	inputs[3].Placeholder = "/"
-	inputs[3].CharLimit = 256
-	inputs[3].Width = 30
-	inputs[3].SetValue("/")
+	inputs[3].Placeholder = "password"
+	inputs[3].EchoMode = textinput.EchoPassword
+	inputs[3].EchoCharacter = '•'
+	inputs[3].CharLimit = 128
+	inputs[3].Width = 20
+
+	inputs[4] = textinput.New()
+	inputs[4].Placeholder = "/"
+	inputs[4].CharLimit = 256
+	inputs[4].Width = 30
+	inputs[4].SetValue("/")
 
 	l := list.New([]list.Item{}, itemDelegate{}, 0, 0)
 	l.SetShowStatusBar(false)
@@ -142,6 +150,8 @@ func (m SFTPModel) Init() tea.Cmd {
 }
 
 func (m SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -190,7 +200,8 @@ func (m SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ConnectionState:
 		return m.updateConnection(msg)
 	case BrowserState:
-		return m.updateBrowser(msg)
+		m.fileList, cmd = m.fileList.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -214,6 +225,7 @@ func (m SFTPModel) View() string {
 }
 
 func (m SFTPModel) updateConnection(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -229,14 +241,14 @@ func (m SFTPModel) updateConnection(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	var cmds []tea.Cmd = make([]tea.Cmd, len(m.inputs))
 	for i := range m.inputs {
-		m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
+		m.inputs[i], cmd = m.inputs[i].Update(msg)
 	}
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
 func (m SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -258,7 +270,6 @@ func (m SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	var cmd tea.Cmd
 	m.fileList, cmd = m.fileList.Update(msg)
 	return m, cmd
 }

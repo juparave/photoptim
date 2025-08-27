@@ -1,34 +1,59 @@
 package tui
 
 import (
+	"path/filepath"
+
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func (m Model) updateFilePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateFilePicker(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	// Check if a file was selected
-	if didSelect, path := m.filepicker.DidSelectFile(msg); didSelect {
-		// A file was selected
-		m.selectedFile = path
-		m.state = optimizerListState
+	switch msg := msg.(type) {
+	case fileListMsg:
+		m.fileList.SetItems(msg)
 		return m, nil
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			i, ok := m.fileList.SelectedItem().(item)
+			if !ok {
+				return m, nil
+			}
+
+			if i.isDir {
+				// It's a directory, so navigate into it
+				m.currentPath = filepath.Join(m.currentPath, i.name)
+				return m, m.updateFileList(m.currentPath)
+			} else {
+				// It's a file, so toggle selection
+				m.toggleFileSelection(i.name)
+			}
+
+		case " ": // Spacebar
+			i, ok := m.fileList.SelectedItem().(item)
+			if !ok {
+				return m, nil
+			}
+			if !i.isDir {
+				m.toggleFileSelection(i.name)
+			}
+		case "s": // continue to next step
+			if len(m.selectedFiles) > 0 {
+				m.state = optimizerListState
+			}
+			return m, nil
+		}
 	}
 
-	// Check if a disabled file was selected (wrong file type)
-	if didSelect, path := m.filepicker.DidSelectDisabledFile(msg); didSelect {
-		// Could show an error message here
-		_ = path // Ignore for now
-	}
-
-	// Update the filepicker
-	m.filepicker, cmd = m.filepicker.Update(msg)
+	fileList, cmd := m.fileList.Update(msg)
+	m.fileList = fileList
 	return m, cmd
 }
 
-func (m Model) updateOptimizerList(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateOptimizerList(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -41,11 +66,12 @@ func (m Model) updateOptimizerList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.optimizerList, cmd = m.optimizerList.Update(msg)
+	optimizerList, cmd := m.optimizerList.Update(msg)
+	m.optimizerList = optimizerList
 	return m, cmd
 }
 
-func (m Model) updateQualityInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateQualityInput(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -59,11 +85,12 @@ func (m Model) updateQualityInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.qualityInput, cmd = m.qualityInput.Update(msg)
+	qualityInput, cmd := m.qualityInput.Update(msg)
+	m.qualityInput = qualityInput
 	return m, cmd
 }
 
-func (m Model) updateOutputDirInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateOutputDirInput(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -72,15 +99,16 @@ func (m Model) updateOutputDirInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Start optimization
 			m.state = optimizingState
 			m.outputDirInput.Blur()
-			return m, startOptimization(m)
+			return m, startOptimization(*m)
 		}
 	}
 
-	m.outputDirInput, cmd = m.outputDirInput.Update(msg)
+	outputDirInput, cmd := m.outputDirInput.Update(msg)
+	m.outputDirInput = outputDirInput
 	return m, cmd
 }
 
-func (m Model) updateOptimizing(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) updateOptimizing(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -116,3 +144,19 @@ func (m Model) updateOptimizing(msg tea.Msg) (tea.Model, tea.Cmd) {
 type progressMsg float64
 type finishedMsg struct{}
 type updateStatusMsg string
+
+type optimizationMsg struct {
+	selectedFiles []string
+	quality       string
+	outputDir     string
+}
+
+func startOptimization(m Model) tea.Cmd {
+	return func() tea.Msg {
+		return optimizationMsg{
+			selectedFiles: m.getSelectedFiles(),
+			quality:       m.qualityInput.Value(),
+			outputDir:     m.outputDirInput.Value(),
+		}
+	}
+}

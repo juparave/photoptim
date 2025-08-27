@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,7 +34,9 @@ func (i item) Title() string {
 }
 
 // itemDelegate handles rendering list items.
-type itemDelegate struct{}
+type itemDelegate struct {
+	model *Model
+}
 
 func (d itemDelegate) Height() int {
 	return 1
@@ -50,7 +53,19 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		return
 	}
 
+	// Check if the item is selected
+	selected := "[ ]"
+	absPath, err := filepath.Abs(filepath.Join(d.model.currentPath, i.name))
+	if err == nil {
+		if _, ok := d.model.selectedFiles[absPath]; ok {
+			selected = "[x]"
+		}
+	}
+
 	str := i.Title()
+	if !i.isDir {
+		str = fmt.Sprintf("%s %s", selected, str)
+	}
 
 	fn := itemStyle.Render
 	if index == m.Index() {

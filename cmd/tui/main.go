@@ -14,7 +14,7 @@ func main() {
 	model := tui.NewModel()
 
 	// Create the program
-	program := tea.NewProgram(model)
+	program := tea.NewProgram(&model)
 
 	// Run the program
 	if _, err := program.Run(); err != nil {
