@@ -293,8 +293,9 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 			}
 		}
 
-		// Optimize the image data
-		optimizedData, res, err := opt.OptimizeBytes(data, ext, optimizer.Params{JPEGQuality: opt.Quality})
+		// Optimize the image data (remove leading dot from extension)
+		format := strings.TrimPrefix(ext, ".")
+		optimizedData, res, err := opt.OptimizeBytes(data, format, optimizer.Params{JPEGQuality: opt.Quality})
 		if err != nil {
 			return fileOptimizedMsg{
 				result:  fmt.Sprintf("❌ %s: optimization failed (%v)", filename, err),
