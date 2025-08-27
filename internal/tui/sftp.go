@@ -58,6 +58,24 @@ func formatFileSize(size int64) string {
 	}
 }
 
+// Mobile device size presets
+var resizePresets = []struct {
+	name   string
+	width  int
+	height int
+}{
+	{"Disabled", 0, 0},
+	{"iPhone 15 Pro Max", 1290, 2796},
+	{"iPhone 15/14", 1179, 2556},
+	{"Samsung Galaxy S23 Ultra", 1440, 3088},
+	{"Google Pixel 7 Pro", 1440, 3120},
+	{"iPad Pro 12.9\"", 2048, 2732},
+	{"iPad Mini", 1488, 2266},
+	{"Full HD", 1920, 1080},
+	{"2K QHD", 2560, 1440},
+	{"4K UHD", 3840, 2160},
+}
+
 // sftpItemDelegate handles rendering SFTP list items.
 type sftpItemDelegate struct {
 	model *SFTPModel
@@ -148,7 +166,7 @@ type SFTPModel struct {
 	sftpClient    *sftpfs.Client
 	fileList      list.Model
 	selectedFiles map[string]struct{}
-	
+
 	// Progress tracking for optimization
 	progress            progress.Model
 	optimizing          bool
@@ -158,20 +176,41 @@ type SFTPModel struct {
 	totalFiles          int
 	optimizedCount      int
 	failedCount         int
+
+	// Resize parameters
+	maxWidth     int
+	maxHeight    int
+	resizePreset int // 0 = disabled, 1+ = preset index
 }
 
 // --- Bubble Tea Messages ---
 type (
-	sftpConnectSuccessMsg struct{ client *sftpfs.Client }
-	sftpConnectErrorMsg   struct{ err error }
-	filesListedMsg        struct{ files []list.Item }
-	fileListErrorMsg      struct{ err error }
-	optimizationCompleteMsg struct{ optimized int; failed int; results []string }
+	sftpConnectSuccessMsg   struct{ client *sftpfs.Client }
+	sftpConnectErrorMsg     struct{ err error }
+	filesListedMsg          struct{ files []list.Item }
+	fileListErrorMsg        struct{ err error }
+	optimizationCompleteMsg struct {
+		optimized int
+		failed    int
+		results   []string
+	}
 	optimizationErrorMsg    struct{ err error }
-	optimizationProgressMsg struct{ current int; total int; filename string; result string }
-	startOptimizationMsg    struct{ files []string }
-	optimizeFileMsg         struct{ filePath string; index int; total int }
-	fileOptimizedMsg        struct{ result string; success bool }
+	optimizationProgressMsg struct {
+		current  int
+		total    int
+		filename string
+		result   string
+	}
+	startOptimizationMsg struct{ files []string }
+	optimizeFileMsg      struct {
+		filePath string
+		index    int
+		total    int
+	}
+	fileOptimizedMsg struct {
+		result  string
+		success bool
+	}
 )
 
 // --- Bubble Tea Commands ---
@@ -295,7 +334,11 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 
 		// Optimize the image data (remove leading dot from extension)
 		format := strings.TrimPrefix(ext, ".")
-		optimizedData, res, err := opt.OptimizeBytes(data, format, optimizer.Params{JPEGQuality: opt.Quality})
+		optimizedData, res, err := opt.OptimizeBytes(data, format, optimizer.Params{
+			JPEGQuality: opt.Quality,
+			MaxWidth:    m.maxWidth,
+			MaxHeight:   m.maxHeight,
+		})
 		if err != nil {
 			return fileOptimizedMsg{
 				result:  fmt.Sprintf("❌ %s: optimization failed (%v)", filename, err),
@@ -343,7 +386,6 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 		}
 	}
 }
-
 
 // --- Model Initialization and Methods ---
 
@@ -457,7 +499,7 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentFile = ""
 		m.progress.SetPercent(0)
 		m.status = "Starting optimization..."
-		
+
 		// Start processing the first file
 		if len(msg.files) > 0 {
 			return m, m.optimizeFileCmd(msg.files[0], 0, len(msg.files))
@@ -471,14 +513,14 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.failedCount++
 		}
-		
+
 		// Add result
 		m.optimizationResults = append(m.optimizationResults, msg.result)
-		
+
 		// Update progress
 		progressPercent := float64(m.filesProcessed) / float64(m.totalFiles)
 		cmd = m.progress.SetPercent(progressPercent)
-		
+
 		// Check if we're done
 		if m.filesProcessed >= m.totalFiles {
 			m.loading = false
@@ -554,11 +596,11 @@ func (m SFTPModel) View() string {
 			// Show optimization progress
 			var content strings.Builder
 			content.WriteString(fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), m.status))
-			
+
 			// Show progress bar
 			content.WriteString(m.progress.View())
 			content.WriteString("\n\n")
-			
+
 			// Show recent results (last 3)
 			if len(m.optimizationResults) > 0 {
 				content.WriteString("Recent results:\n")
@@ -571,7 +613,7 @@ func (m SFTPModel) View() string {
 				}
 				content.WriteString("\n")
 			}
-			
+
 			return docStyle.Render(content.String())
 		} else {
 			return fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), m.status)
@@ -581,7 +623,15 @@ func (m SFTPModel) View() string {
 	switch m.state {
 	case BrowserState:
 		content := m.fileList.View()
-		
+
+		// Show resize status
+		preset := resizePresets[m.resizePreset]
+		resizeStatus := fmt.Sprintf("Resize: %s", preset.name)
+		if m.maxWidth > 0 || m.maxHeight > 0 {
+			resizeStatus = fmt.Sprintf("Resize: %s (%dx%d)", preset.name, m.maxWidth, m.maxHeight)
+		}
+		content += fmt.Sprintf("\n\n%s (press 'r' to cycle)", resizeStatus)
+
 		// Show optimization results if available
 		if len(m.optimizationResults) > 0 && !m.loading {
 			content += "\n\nOptimization Results:\n"
@@ -589,7 +639,7 @@ func (m SFTPModel) View() string {
 				content += fmt.Sprintf("  %s\n", result)
 			}
 		}
-		
+
 		return docStyle.Render(content)
 	default:
 		return m.connectionView()
@@ -671,6 +721,14 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.status = "Resorting files..."
 			return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
+		case "r":
+			// Cycle through resize presets
+			m.resizePreset = (m.resizePreset + 1) % len(resizePresets)
+			preset := resizePresets[m.resizePreset]
+			m.maxWidth = preset.width
+			m.maxHeight = preset.height
+			m.status = fmt.Sprintf("Resize: %s (%dx%d) - press 'r' to cycle", preset.name, preset.width, preset.height)
+			return m, nil
 		}
 	}
 
@@ -764,13 +822,13 @@ func (m *SFTPModel) updateListTitle() {
 	if m.sortMode == SortBySize {
 		sortModeStr = "size"
 	}
-	
+
 	selectedCount := len(m.selectedFiles)
 	selectionStr := ""
 	if selectedCount > 0 {
 		selectionStr = fmt.Sprintf(" | %d selected", selectedCount)
 	}
-	
+
 	m.fileList.Title = fmt.Sprintf("Remote Files: %s (sorted by %s)%s - Press 's' to toggle sort, space to select, enter to optimize", m.currentPath, sortModeStr, selectionStr)
 }
 

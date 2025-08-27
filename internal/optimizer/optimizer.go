@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/image/draw"
 )
 
 // Optimizer interface (remote pipeline usage) - operates on in-memory bytes.
@@ -21,6 +23,8 @@ type Optimizer interface {
 // Params holds format-specific optimization parameters.
 type Params struct {
 	JPEGQuality int
+	MaxWidth    int // 0 = no width limit
+	MaxHeight   int // 0 = no height limit
 }
 
 // Result describes optimization outcome.
@@ -42,6 +46,42 @@ func New() *ImageOptimizer {
 	return &ImageOptimizer{Quality: 80}
 }
 
+// resizeImage resizes an image while maintaining aspect ratio using CatmullRom interpolation
+func resizeImage(img image.Image, maxWidth, maxHeight int) image.Image {
+	if maxWidth <= 0 && maxHeight <= 0 {
+		return img
+	}
+
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+
+	// Calculate new dimensions while maintaining aspect ratio
+	newWidth, newHeight := width, height
+
+	if maxWidth > 0 && width > maxWidth {
+		newWidth = maxWidth
+		newHeight = height * maxWidth / width
+	}
+
+	if maxHeight > 0 && newHeight > maxHeight {
+		newHeight = maxHeight
+		newWidth = width * maxHeight / height
+	}
+
+	// Don't resize if dimensions are the same
+	if newWidth == width && newHeight == height {
+		return img
+	}
+
+	// Create destination image
+	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+
+	// Resize with CatmullRom interpolation
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+
+	return dst
+}
+
 // OptimizeBytes implements Optimizer interface.
 func (o *ImageOptimizer) OptimizeBytes(data []byte, format string, params Params) ([]byte, Result, error) {
 	start := time.Now()
@@ -59,6 +99,11 @@ func (o *ImageOptimizer) OptimizeBytes(data []byte, format string, params Params
 	}
 	if format == "" {
 		format = decodeFormat
+	}
+
+	// Resize if dimensions are specified
+	if params.MaxWidth > 0 || params.MaxHeight > 0 {
+		img = resizeImage(img, params.MaxWidth, params.MaxHeight)
 	}
 	buf := &bytes.Buffer{}
 	switch strings.ToLower(format) {
