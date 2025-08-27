@@ -19,13 +19,13 @@ Photoptim is a fast and flexible tool for optimizing images. It supports various
 To install Photoptim, you need to have Go installed on your system. Then run:
 
 ```bash
-go install github.com/yourusername/photoptim@latest
+go install github.com/juparave/photoptim@latest
 ```
 
 Or clone this repository and build it locally:
 
 ```bash
-git clone https://github.com/yourusername/photoptim.git
+git clone https://github.com/juparave/photoptim.git
 cd photoptim
 go build -o photoptim cmd/photoptim/main.go
 ```
