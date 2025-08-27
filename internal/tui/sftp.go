@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"photoptim/internal/optimizer"
 	"photoptim/internal/remotefs"
 	sftpfs "photoptim/internal/sftp"
 
@@ -153,6 +155,8 @@ type (
 	sftpConnectErrorMsg   struct{ err error }
 	filesListedMsg        struct{ files []list.Item }
 	fileListErrorMsg      struct{ err error }
+	optimizationCompleteMsg struct{ optimized int; failed int }
+	optimizationErrorMsg    struct{ err error }
 )
 
 // --- Bubble Tea Commands ---
@@ -232,6 +236,69 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 	}
 }
 
+func (m SFTPModel) optimizeSelectedFiles() tea.Cmd {
+	return func() tea.Msg {
+		if m.sftpClient == nil {
+			return optimizationErrorMsg{err: fmt.Errorf("no SFTP connection")}
+		}
+
+		ctx := context.Background()
+		opt := optimizer.New()
+		opt.Quality = 80 // default quality
+
+		optimized := 0
+		failed := 0
+
+		for filePath := range m.selectedFiles {
+			// Open and read the file
+			reader, _, err := m.sftpClient.Open(ctx, filePath)
+			if err != nil {
+				failed++
+				continue
+			}
+
+			data, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				failed++
+				continue
+			}
+
+			// Get file extension for format detection
+			ext := strings.ToLower(filepath.Ext(filePath))
+			if ext == "" {
+				failed++
+				continue
+			}
+
+			// Optimize the image data
+			optimizedData, _, err := opt.OptimizeBytes(data, ext, optimizer.Params{JPEGQuality: opt.Quality})
+			if err != nil {
+				failed++
+				continue
+			}
+
+			// Write the optimized data back (overwrite existing file)
+			writer, err := m.sftpClient.Create(ctx, filePath, true)
+			if err != nil {
+				failed++
+				continue
+			}
+
+			_, err = writer.Write(optimizedData)
+			writer.Close()
+			if err != nil {
+				failed++
+				continue
+			}
+
+			optimized++
+		}
+
+		return optimizationCompleteMsg{optimized: optimized, failed: failed}
+	}
+}
+
 // --- Model Initialization and Methods ---
 
 func NewSFTPModel() SFTPModel {
@@ -280,7 +347,7 @@ func NewSFTPModel() SFTPModel {
 	m.inputs = inputs
 
 	l := list.New([]list.Item{}, sftpItemDelegate{model: &m}, 0, 0)
-	l.SetShowStatusBar(false)
+	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false)
 	m.fileList = l
 
@@ -322,14 +389,26 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case filesListedMsg:
 		m.loading = false
 		m.fileList.SetItems(msg.files)
-		sortModeStr := "name"
-		if m.sortMode == SortBySize {
-			sortModeStr = "size"
-		}
-		m.fileList.Title = fmt.Sprintf("Remote Files: %s (sorted by %s) - Press 's' to toggle sort", m.currentPath, sortModeStr)
+		m.updateListTitle()
 		return m, nil
 
 	case fileListErrorMsg:
+		m.loading = false
+		m.err = msg.err
+		return m, nil
+
+	case optimizationCompleteMsg:
+		m.loading = false
+		if msg.failed > 0 {
+			m.status = fmt.Sprintf("Optimization complete: %d optimized, %d failed", msg.optimized, msg.failed)
+		} else {
+			m.status = fmt.Sprintf("Optimization complete: %d files optimized successfully", msg.optimized)
+		}
+		// Clear selections after successful optimization
+		m.selectedFiles = make(map[string]struct{})
+		return m, m.listFilesCmd() // Refresh the file list
+
+	case optimizationErrorMsg:
 		m.loading = false
 		m.err = msg.err
 		return m, nil
@@ -422,6 +501,11 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				m.status = fmt.Sprintf("Loading %s...", m.currentPath)
 				return m, tea.Batch(m.spinner.Tick, m.listFilesCmd())
+			} else if len(m.selectedFiles) > 0 {
+				// Start optimization of selected files
+				m.loading = true
+				m.status = "Optimizing selected files..."
+				return m, tea.Batch(m.spinner.Tick, m.optimizeSelectedFiles())
 			}
 		case "backspace", "left":
 			if m.currentPath != "." {
@@ -524,6 +608,23 @@ func (m *SFTPModel) toggleFileSelection(filename string) {
 		}
 	}
 	m.fileList.SetItems(newItems)
+	m.updateListTitle()
+}
+
+// updateListTitle updates the list title with current path, sort mode, and selection count
+func (m *SFTPModel) updateListTitle() {
+	sortModeStr := "name"
+	if m.sortMode == SortBySize {
+		sortModeStr = "size"
+	}
+	
+	selectedCount := len(m.selectedFiles)
+	selectionStr := ""
+	if selectedCount > 0 {
+		selectionStr = fmt.Sprintf(" | %d selected", selectedCount)
+	}
+	
+	m.fileList.Title = fmt.Sprintf("Remote Files: %s (sorted by %s)%s - Press 's' to toggle sort, space to select, enter to optimize", m.currentPath, sortModeStr, selectionStr)
 }
 
 // isFileSelected checks if a file is currently selected
