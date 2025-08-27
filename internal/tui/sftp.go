@@ -24,9 +24,10 @@ var docStyle = lipgloss.NewStyle().Padding(1, 2)
 
 // sftpItem represents a file or directory in the SFTP list.
 type sftpItem struct {
-	name  string
-	isDir bool
-	size  int64
+	name     string
+	isDir    bool
+	size     int64
+	selected bool
 }
 
 func (i sftpItem) FilterValue() string { return i.name }
@@ -77,30 +78,36 @@ func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 		return
 	}
 
-	str := i.Title()
-
 	// Add selection checkbox for files (not directories)
 	if !i.isDir {
 		selected := "[ ]"
-		if d.model.isFileSelected(i.name) {
+		if i.selected {
 			selected = "[x]"
 		}
-		str = fmt.Sprintf("%s %s", selected, str)
-	}
-
-	fn := itemStyle.Render
-	if index == m.Index() {
-		fn = func(s ...string) string {
-			return selectedItemStyle.Render("> " + s[0])
+		// For files, show the selection checkbox followed by the formatted title
+		str := fmt.Sprintf("%s %s", selected, i.Title())
+		fn := itemStyle.Render
+		if index == m.Index() {
+			fn = func(s ...string) string {
+				return selectedItemStyle.Render("> " + s[0])
+			}
+		} else if i.size > sizeThresholdMB*1024*1024 {
+			// Highlight large files
+			fn = func(s ...string) string {
+				return largeFileStyle.Render(s[0])
+			}
 		}
-	} else if !i.isDir && i.size > sizeThresholdMB*1024*1024 {
-		// Highlight large files
-		fn = func(s ...string) string {
-			return largeFileStyle.Render(s[0])
+		fmt.Fprint(w, fn(str))
+	} else {
+		// For directories, just show the title
+		fn := itemStyle.Render
+		if index == m.Index() {
+			fn = func(s ...string) string {
+				return selectedItemStyle.Render("> " + s[0])
+			}
 		}
+		fmt.Fprint(w, fn(i.Title()))
 	}
-
-	fmt.Fprint(w, fn(str))
 }
 
 // SFTPState represents the current view of the SFTP TUI.
@@ -189,7 +196,11 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 
 		items := make([]sftpItem, len(filteredEntries))
 		for i, entry := range filteredEntries {
-			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir, size: entry.Size}
+			// Check if this file is selected
+			filePath := path.Join(m.currentPath, entry.Name)
+			_, isSelected := m.selectedFiles[filePath]
+
+			items[i] = sftpItem{name: entry.Name, isDir: entry.IsDir, size: entry.Size, selected: isSelected}
 		}
 
 		// Sort items: directories first, then by sort mode
@@ -329,7 +340,7 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			if m.sftpClient != nil {
 				m.sftpClient.Close()
 			}
@@ -392,14 +403,16 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "q":
+			if m.sftpClient != nil {
+				m.sftpClient.Close()
+			}
+			return m, tea.Quit
 		case " ":
-			// Handle spacebar for file selection
+			// Handle spacebar for file selection - return early to prevent list from processing
 			i, ok := m.fileList.SelectedItem().(sftpItem)
 			if ok && !i.isDir {
 				m.toggleFileSelection(i.name)
-				// Refresh the list to show updated selection
-				items := m.fileList.Items()
-				m.fileList.SetItems(items)
 			}
 			return m, nil
 		case "enter":
@@ -494,6 +507,23 @@ func (m *SFTPModel) toggleFileSelection(filename string) {
 	} else {
 		m.selectedFiles[filePath] = struct{}{}
 	}
+
+	// Update the list items to reflect the new selection state
+	items := m.fileList.Items()
+	newItems := make([]list.Item, len(items))
+	for i, item := range items {
+		if sftpItem, ok := item.(sftpItem); ok {
+			// Create a new item with updated selection state
+			itemFilePath := path.Join(m.currentPath, sftpItem.name)
+			_, isSelected := m.selectedFiles[itemFilePath]
+			newSftpItem := sftpItem
+			newSftpItem.selected = isSelected
+			newItems[i] = newSftpItem
+		} else {
+			newItems[i] = item
+		}
+	}
+	m.fileList.SetItems(newItems)
 }
 
 // isFileSelected checks if a file is currently selected
