@@ -4,16 +4,15 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"photoptim/internal/remotefs"
 	sftpfs "photoptim/internal/sftp"
+	"photoptim/internal/tui"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var sftpCmd = &cobra.Command{
@@ -29,37 +28,8 @@ var sftpCmd = &cobra.Command{
 		password, _ := cmd.Flags().GetString("password")
 		batch, _ := cmd.Flags().GetBool("batch")
 
-		if port == 0 {
-			port = 22
-		}
-
-		if !batch { // interactive prompting
-			rdr := bufio.NewReader(os.Stdin)
-			if host == "" {
-				host = prompt(rdr, "Host: ")
-			}
-			if pStr := promptDefault(rdr, fmt.Sprintf("Port [%d]: ", port), strconv.Itoa(port)); pStr != "" {
-				if v, err := strconv.Atoi(pStr); err == nil {
-					port = v
-				}
-			}
-			if user == "" {
-				user = prompt(rdr, "User: ")
-			}
-			if remotePath == "" { // let user specify or accept default '/'
-				remotePath = promptDefault(rdr, "Remote path [/] (use / for home): ", "/")
-			}
-			if keyPath == "" && password == "" { // ask for password only if neither provided
-				if term.IsTerminal(int(os.Stdin.Fd())) {
-					fmt.Print("Password (leave empty to skip password auth): ")
-					b, _ := term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Println()
-					password = strings.TrimSpace(string(b))
-				} else {
-					password = strings.TrimSpace(prompt(rdr, "Password (leave empty to skip password auth): "))
-				}
-			}
-		} else { // batch mode validation
+		if batch {
+			// batch mode validation
 			missing := []string{}
 			if host == "" {
 				missing = append(missing, "--host")
@@ -67,52 +37,39 @@ var sftpCmd = &cobra.Command{
 			if user == "" {
 				missing = append(missing, "--user")
 			}
-			if len(missing) > 0 { // remote-path optional in batch
+			if len(missing) > 0 {
 				return fmt.Errorf("missing required flags in batch mode: %s", strings.Join(missing, ", "))
 			}
-		}
 
-		// Treat '/' or empty remotePath as request to use user home as chroot (handled in client)
-		if remotePath == "/" {
-			remotePath = ""
-		}
-
-		fmt.Printf("Connecting to %s@%s:%d (path=%s) ...\n", user, host, port, func() string {
-			if remotePath == "" {
-				return "<home>"
-			}
-			return remotePath
-		}())
-		cfg := remotefs.ConnectionConfig{Host: host, Port: port, User: user, Password: password, KeyPath: keyPath, RemotePath: remotePath}
-		client := &sftpfs.Client{}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := client.Connect(ctx, cfg); err != nil {
-			return fmt.Errorf("sftp connect failed: %w", err)
-		}
-		defer client.Close()
-		// List root
-		entries, err := client.List(ctx, ".")
-		if err != nil {
-			return fmt.Errorf("list: %w", err)
-		}
-		if len(entries) == 0 {
-			fmt.Println("(remote directory is empty)")
-		} else {
-			fmt.Println("Remote entries:")
-			for _, e := range entries {
-				typ := "file"
-				if e.IsDir {
-					typ = "dir"
+			// TODO: Implement full batch-mode pipeline here.
+			// For now, we can leave the existing connectivity test as a placeholder.
+			fmt.Printf("Connecting to %s@%s:%d (path=%s) ...\n", user, host, port, func() string {
+				if remotePath == "" {
+					return "<home>"
 				}
-				fmt.Printf("  %-30s %7d %s\n", e.Name, e.Size, typ)
+				return remotePath
+			}())
+			cfg := remotefs.ConnectionConfig{Host: host, Port: port, User: user, Password: password, KeyPath: keyPath, RemotePath: remotePath}
+			client := &sftpfs.Client{}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := client.Connect(ctx, cfg); err != nil {
+				return fmt.Errorf("sftp connect failed: %w", err)
+			}
+			defer client.Close()
+			fmt.Println("SFTP basic connectivity verified. (Batch pipeline not yet wired here.)")
+
+		} else {
+			// Interactive TUI mode
+			model := tui.NewSFTPModel()
+			program := tea.NewProgram(model)
+
+			// Run the program
+			if _, err := program.Run(); err != nil {
+				return fmt.Errorf("error running program: %w", err)
 			}
 		}
-		fmt.Println("SFTP basic connectivity verified. (Optimization pipeline not yet wired here.)")
-		if batch {
-			return nil
-		}
-		fmt.Println("Future: launch SFTP TUI states (connection/browser/selection).")
+
 		return nil
 	},
 }
