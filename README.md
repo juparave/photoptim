@@ -6,9 +6,13 @@ Photoptim is a fast and flexible tool for optimizing images. It supports various
 
 - Optimize JPEG and PNG images
 - Adjustable quality settings for JPEG compression
+- Image resizing with aspect ratio preservation
+- Multiple mobile device size presets (iPhone, Samsung, iPad, etc.)
 - Batch processing of multiple images
+- SFTP remote file optimization
 - CLI interface for easy usage
 - TUI (Terminal User Interface) for interactive usage
+- SFTP TUI for remote file management and optimization
 
 ## Installation
 
@@ -44,7 +48,10 @@ photoptim batch input_directory output_directory --quality 75
 
 ### Terminal User Interface
 
-Photoptim also includes a TUI (Terminal User Interface) for interactive usage:
+Photoptim includes two TUI (Terminal User Interface) applications:
+
+#### Local File TUI
+For optimizing local images:
 
 ```bash
 go run cmd/tui/main.go
@@ -57,7 +64,20 @@ go build -o photoptim-tui cmd/tui/main.go
 ./photoptim-tui
 ```
 
-See [TUI Usage Guide](TUI_USAGE.md) for detailed instructions on how to use the TUI.
+#### SFTP TUI  
+For optimizing remote images over SFTP:
+
+```bash
+go run cmd/photoptim/main.go sftp-tui
+```
+
+Features:
+- Browse remote directories
+- Select multiple files for optimization  
+- Resize images to common mobile device sizes
+- Real-time optimization results
+
+See [TUI Usage Guide](TUI_USAGE.md) and [SFTP Extension Guide](SFTP_EXTENSION_PRD.md) for detailed instructions.
 
 Note: The TUI application requires a proper terminal environment with /dev/tty access. It may not work in some IDEs or remote environments that don't provide full TTY support.
 
