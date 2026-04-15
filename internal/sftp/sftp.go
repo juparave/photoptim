@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	pkgsftp "github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/juparave/photoptim/internal/remotefs"
 )
@@ -39,7 +41,7 @@ func (c *Client) Connect(ctx context.Context, cfg remotefs.ConnectionConfig) err
 		User:            cfg.User,
 		Auth:            authMethods,
 		HostKeyCallback: c.hostKeyCallback(),
-		Timeout:         5 * time.Second,
+		Timeout:         10 * time.Second,
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -64,7 +66,7 @@ func (c *Client) Connect(ctx context.Context, cfg remotefs.ConnectionConfig) err
 	// Determine chroot: user-specified path OR user's home (working directory) by default
 	wd, wdErr := s.Getwd()
 	root := cfg.RemotePath
-	if root == "" || root == "/" {
+	if root == "" || root == "." {
 		if wdErr == nil && wd != "" {
 			root = wd
 		} else {
@@ -161,15 +163,66 @@ func (c *Client) hostKeyCallback() gossh.HostKeyCallback {
 	}
 }
 
-// buildAuth builds SSH auth methods (placeholder: password only if provided).
+// buildAuth builds SSH auth methods (password, ssh-agent, or identity files).
 func buildAuth(cfg remotefs.ConnectionConfig) ([]gossh.AuthMethod, error) {
 	methods := []gossh.AuthMethod{}
-	// TODO: agent, key parsing, passphrase prompt
+
+	// 1. SSH Agent Support (Highest priority, as it's the standard for seamless login)
+	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
+		methods = append(methods, gossh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
+	}
+
+	// 2. Identity Files Support
+	home, err := os.UserHomeDir()
+	if err == nil {
+		keyPaths := []string{}
+		// If user specified a key, try it first
+		if cfg.KeyPath != "" {
+			kp := cfg.KeyPath
+			if strings.HasPrefix(kp, "~") {
+				kp = filepath.Join(home, kp[1:])
+			}
+			keyPaths = append(keyPaths, kp)
+		} else {
+			// Otherwise try common defaults
+			defaults := []string{
+				filepath.Join(home, ".ssh", "id_ed25519"),
+				filepath.Join(home, ".ssh", "id_rsa"),
+				filepath.Join(home, ".ssh", "id_ecdsa"),
+			}
+			keyPaths = append(keyPaths, defaults...)
+		}
+
+		for _, kp := range keyPaths {
+			if kp == "" {
+				continue
+			}
+			key, err := os.ReadFile(kp)
+			if err != nil {
+				continue
+			}
+
+			signer, err := gossh.ParsePrivateKey(key)
+			if err != nil {
+				// If it's encrypted and we have a password, try using it as a passphrase
+				if strings.Contains(err.Error(), "passphrase") && cfg.Password != "" {
+					signer, err = gossh.ParsePrivateKeyWithPassphrase(key, []byte(cfg.Password))
+				}
+				if err != nil {
+					continue
+				}
+			}
+			methods = append(methods, gossh.PublicKeys(signer))
+		}
+	}
+
+	// 3. Password Auth (Fallback)
 	if cfg.Password != "" {
 		methods = append(methods, gossh.Password(cfg.Password))
 	}
+
 	if len(methods) == 0 {
-		return nil, errors.New("no auth methods available (provide key or password)")
+		return nil, errors.New("no auth methods available (ensure ssh-agent is running, default keys exist in ~/.ssh, or provide a password/key)")
 	}
 	return methods, nil
 }
