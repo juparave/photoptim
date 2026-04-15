@@ -84,7 +84,17 @@ func (o *Orchestrator) Run(ctx context.Context, tasks []FileTask) (<-chan Progre
 				prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseDownload, Bytes: int64(len(data)), Total: entry.Size, Done: true, Timestamp: time.Now()}
 				// optimize
 				out, res, optErr := o.Opt.OptimizeBytes(data, detectFormat(task.Entry.Name), optimizer.Params{JPEGQuality: o.JPEGQuality})
-				if res.Skipped || optErr != nil {
+				if optErr != nil && !res.Skipped {
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseOptimize, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Err: optErr, Timestamp: time.Now()}
+					return
+				}
+				if res.Skipped && res.Reason == "no-compression-gain" {
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseOptimize, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Timestamp: time.Now()}
+					// Skip upload phase as original is better
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Timestamp: time.Now()}
+					return
+				}
+				if res.Skipped {
 					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseOptimize, Bytes: res.OriginalSize, Total: res.OriginalSize, Done: true, Err: optErr, Timestamp: time.Now()}
 					return
 				}
