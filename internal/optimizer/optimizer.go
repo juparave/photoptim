@@ -123,6 +123,14 @@ func (o *ImageOptimizer) OptimizeBytes(data []byte, format string, params Params
 	out := buf.Bytes()
 	r.OptimizedSize = int64(len(out))
 	r.Duration = time.Since(start)
+
+	// Check if optimized version is actually smaller
+	if r.OptimizedSize >= r.OriginalSize && params.MaxWidth == 0 && params.MaxHeight == 0 {
+		r.Skipped = true
+		r.Reason = "no-compression-gain"
+		return data, r, nil
+	}
+
 	return out, r, nil
 }
 
@@ -142,9 +150,21 @@ func (o *ImageOptimizer) Optimize(inputPath, outputPath string) error {
 	if err != nil && !res.Skipped {
 		return err
 	}
+
+	if res.Reason == "no-compression-gain" {
+		fmt.Printf("Skipped %s: no compression gain (original is smaller or equal)\n", filepath.Base(inputPath))
+		// If input and output are different, copy original to output?
+		// For now, let's assume we skip if it's the same file.
+		if inputPath == outputPath {
+			return nil
+		}
+		return os.WriteFile(outputPath, data, 0o644)
+	}
+
 	if res.Skipped {
 		return fmt.Errorf("skipped: %s", res.Reason)
 	}
+
 	if err := os.WriteFile(outputPath, out, 0o644); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
