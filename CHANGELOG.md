@@ -4,6 +4,8 @@ All notable changes to Photoptim will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-06-12
+
 ### Added
 - SFTP host key verification against `~/.config/photoptim/known_hosts`
   (trust-on-first-use; rejects changed keys).
