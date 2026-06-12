@@ -109,7 +109,11 @@ func (o *Orchestrator) Run(ctx context.Context, tasks []FileTask) (<-chan Progre
 					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Done: true, Err: err, Timestamp: time.Now()}
 					return
 				}
-				_ = wc.Close()
+				// Close commits the atomic rename; surface its error.
+				if err := wc.Close(); err != nil {
+					prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Done: true, Err: err, Timestamp: time.Now()}
+					return
+				}
 				prog <- ProgressEvent{FileID: i, Name: task.Entry.Name, Phase: PhaseUpload, Bytes: int64(len(out)), Total: int64(len(out)), Done: true, Timestamp: time.Now()}
 			}()
 		}

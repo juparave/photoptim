@@ -44,17 +44,7 @@ var (
 	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(primaryColor)
 	largeFileStyle    = lipgloss.NewStyle().PaddingLeft(4).Foreground(warningColor)
 	directoryStyle    = lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
-
-	// Input Styles
-	inputStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(inactiveColor).
-			Padding(0, 1)
-
-	focusedInputStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(primaryColor).
-				Padding(0, 1)
+	checkedStyle      = lipgloss.NewStyle().Foreground(accentColor)
 
 	// Selection Indicators
 	checkedIcon   = "☑"

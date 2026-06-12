@@ -94,7 +94,7 @@ func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 	if !i.isDir {
 		selectionIndicator = fmt.Sprintf(" %s ", uncheckedIcon)
 		if i.selected {
-			selectionIndicator = fmt.Sprintf(" %s ", checkedIcon)
+			selectionIndicator = fmt.Sprintf(" %s ", checkedStyle.Render(checkedIcon))
 		}
 	}
 
@@ -103,6 +103,8 @@ func (d sftpItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 	baseStyle := itemStyle
 	if i.isDir {
 		baseStyle = directoryStyle
+	} else if i.size >= sizeThresholdMB*1024*1024 {
+		baseStyle = largeFileStyle
 	}
 
 	title := i.Title()
@@ -166,6 +168,9 @@ type SFTPModel struct {
 	maxWidth     int
 	maxHeight    int
 	resizePreset int // 0 = disabled, 1+ = preset index
+
+	// JPEG quality (1-100)
+	quality int
 }
 
 // --- Bubble Tea Messages ---
@@ -174,28 +179,11 @@ type (
 		client *sftpfs.Client
 		path   string
 	}
-	sftpConnectErrorMsg     struct{ err error }
-	filesListedMsg          struct{ files []list.Item }
-	fileListErrorMsg        struct{ err error }
-	optimizationCompleteMsg struct {
-		optimized int
-		failed    int
-		results   []string
-	}
-	optimizationErrorMsg    struct{ err error }
-	optimizationProgressMsg struct {
-		current  int
-		total    int
-		filename string
-		result   string
-	}
+	sftpConnectErrorMsg  struct{ err error }
+	filesListedMsg       struct{ files []list.Item }
+	fileListErrorMsg     struct{ err error }
 	startOptimizationMsg struct{ files []string }
-	optimizeFileMsg      struct {
-		filePath string
-		index    int
-		total    int
-	}
-	fileOptimizedMsg struct {
+	fileOptimizedMsg     struct {
 		result  string
 		success bool
 	}
@@ -294,7 +282,7 @@ func (m SFTPModel) listFilesCmd() tea.Cmd {
 	}
 }
 
-func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cmd {
+func (m SFTPModel) optimizeFileCmd(filePath string) tea.Cmd {
 	return func() tea.Msg {
 		filename := filepath.Base(filePath)
 
@@ -307,7 +295,7 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 
 		ctx := context.Background()
 		opt := optimizer.New()
-		opt.Quality = 80
+		opt.Quality = m.quality
 
 		reader, _, err := m.sftpClient.Open(ctx, filePath)
 		if err != nil {
@@ -372,11 +360,17 @@ func (m SFTPModel) optimizeFileCmd(filePath string, index int, total int) tea.Cm
 			}
 		}
 
-		_, err = writer.Write(optimizedData)
-		writer.Close()
-		if err != nil {
+		if _, err = writer.Write(optimizedData); err != nil {
+			writer.Close()
 			return fileOptimizedMsg{
 				result:  fmt.Sprintf("❌ %s: failed to write (%v)", filename, err),
+				success: false,
+			}
+		}
+		// Close commits the atomic rename over the original file.
+		if err = writer.Close(); err != nil {
+			return fileOptimizedMsg{
+				result:  fmt.Sprintf("❌ %s: failed to finalize (%v)", filename, err),
 				success: false,
 			}
 		}
@@ -399,6 +393,7 @@ func NewSFTPModel() SFTPModel {
 		focusIndex:    0,
 		currentPath:   ".",
 		selectedFiles: make(map[string]struct{}),
+		quality:       80,
 	}
 
 	s := spinner.New()
@@ -516,7 +511,7 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "Starting optimization..."
 
 		if len(msg.files) > 0 {
-			return m, m.optimizeFileCmd(msg.files[0], 0, len(msg.files))
+			return m, m.optimizeFileCmd(msg.files[0])
 		}
 		return m, nil
 
@@ -545,22 +540,24 @@ func (m *SFTPModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			files := m.getSelectedFiles()
 			if m.filesProcessed < len(files) {
-				return m, tea.Batch(cmd, m.optimizeFileCmd(files[m.filesProcessed], m.filesProcessed, len(files)))
+				return m, tea.Batch(cmd, m.optimizeFileCmd(files[m.filesProcessed]))
 			}
 		}
 		return m, cmd
 
 	case tea.KeyMsg:
-		if m.err != nil {
-			m.err = nil
-			return m, nil
-		}
-		switch msg.String() {
-		case "ctrl+c":
+		// Ctrl+C always quits, even while an error is displayed.
+		if msg.String() == "ctrl+c" {
 			if m.sftpClient != nil {
 				m.sftpClient.Close()
 			}
 			return m, tea.Quit
+		}
+		// Any other key dismisses a displayed error and is consumed (so it
+		// doesn't also act on the underlying view).
+		if m.err != nil {
+			m.err = nil
+			return m, nil
 		}
 	}
 
@@ -582,7 +579,7 @@ func (m SFTPModel) View() string {
 	} else if m.loading {
 		if m.optimizing {
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("\n   %s %s\n\n", m.spinner.View(), headerStyle.Render(m.status)))
+			fmt.Fprintf(&b, "\n   %s %s\n\n", m.spinner.View(), headerStyle.Render(m.status))
 			b.WriteString(m.progress.View())
 			if len(m.optimizationResults) > 0 {
 				b.WriteString("\n\nRecent results:\n")
@@ -591,7 +588,7 @@ func (m SFTPModel) View() string {
 					start = len(m.optimizationResults) - 3
 				}
 				for i := start; i < len(m.optimizationResults); i++ {
-					b.WriteString(fmt.Sprintf("  %s\n", m.optimizationResults[i]))
+					fmt.Fprintf(&b, "  %s\n", m.optimizationResults[i])
 				}
 			}
 			content = b.String()
@@ -602,12 +599,17 @@ func (m SFTPModel) View() string {
 		switch m.state {
 		case BrowserState:
 			content = m.fileList.View()
+
 			preset := resizePresets[m.resizePreset]
-			resizeStatus := fmt.Sprintf("Resize: %s", preset.name)
+			resizeStatus := preset.name
 			if m.maxWidth > 0 || m.maxHeight > 0 {
-				resizeStatus = fmt.Sprintf("Resize: %s (%dx%d)", preset.name, m.maxWidth, m.maxHeight)
+				resizeStatus = fmt.Sprintf("%s (%dx%d)", preset.name, m.maxWidth, m.maxHeight)
 			}
-			content += footerStyle.Render(fmt.Sprintf("\n%s (press 'r' to cycle)", resizeStatus))
+
+			settings := fmt.Sprintf("Quality: %d  •  Resize: %s", m.quality, resizeStatus)
+			hints := "space select · a all · c clear · +/- quality · r resize · s sort · enter optimize · q quit"
+			content += "\n" + statusStyle.Render(settings) +
+				footerStyle.Render("\n"+hints)
 		default:
 			content = m.connectionView()
 		}
@@ -729,6 +731,28 @@ func (m *SFTPModel) updateBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.maxHeight = preset.height
 			m.status = fmt.Sprintf("Resize: %s (%dx%d) - press 'r' to cycle", preset.name, preset.width, preset.height)
 			return m, nil
+		case "+", "=":
+			if m.quality < 100 {
+				m.quality += 5
+				if m.quality > 100 {
+					m.quality = 100
+				}
+			}
+			return m, nil
+		case "-", "_":
+			if m.quality > 1 {
+				m.quality -= 5
+				if m.quality < 1 {
+					m.quality = 1
+				}
+			}
+			return m, nil
+		case "a":
+			m.selectAllFiles()
+			return m, nil
+		case "c":
+			m.clearSelection()
+			return m, nil
 		}
 	}
 
@@ -772,18 +796,39 @@ func (m *SFTPModel) toggleFileSelection(filename string) {
 	} else {
 		m.selectedFiles[filePath] = struct{}{}
 	}
+	m.syncSelectionState()
+}
 
+// selectAllFiles selects every file (not directory) in the current view.
+func (m *SFTPModel) selectAllFiles() {
+	for _, listItem := range m.fileList.Items() {
+		si, ok := listItem.(sftpItem)
+		if !ok || si.isDir || si.name == ".." {
+			continue
+		}
+		m.selectedFiles[path.Join(m.currentPath, si.name)] = struct{}{}
+	}
+	m.syncSelectionState()
+}
+
+// clearSelection deselects all files across all directories.
+func (m *SFTPModel) clearSelection() {
+	m.selectedFiles = make(map[string]struct{})
+	m.syncSelectionState()
+}
+
+// syncSelectionState refreshes the rendered checkboxes and the list title to
+// match m.selectedFiles.
+func (m *SFTPModel) syncSelectionState() {
 	items := m.fileList.Items()
 	newItems := make([]list.Item, len(items))
-	for i, item := range items {
-		if sftpItem, ok := item.(sftpItem); ok {
-			itemFilePath := path.Join(m.currentPath, sftpItem.name)
-			_, isSelected := m.selectedFiles[itemFilePath]
-			newSftpItem := sftpItem
-			newSftpItem.selected = isSelected
-			newItems[i] = newSftpItem
+	for i, listItem := range items {
+		if si, ok := listItem.(sftpItem); ok {
+			_, isSelected := m.selectedFiles[path.Join(m.currentPath, si.name)]
+			si.selected = isSelected
+			newItems[i] = si
 		} else {
-			newItems[i] = item
+			newItems[i] = listItem
 		}
 	}
 	m.fileList.SetItems(newItems)
@@ -795,12 +840,11 @@ func (m *SFTPModel) updateListTitle() {
 	if m.sortMode == SortBySize {
 		sortModeStr = "size"
 	}
-	selectedCount := len(m.selectedFiles)
 	selectionStr := ""
-	if selectedCount > 0 {
+	if selectedCount := len(m.selectedFiles); selectedCount > 0 {
 		selectionStr = fmt.Sprintf(" | %d selected", selectedCount)
 	}
-	m.fileList.Title = fmt.Sprintf("Remote Files: %s (sorted by %s)%s - Press 's' to toggle sort, space to select, enter to optimize", m.currentPath, sortModeStr, selectionStr)
+	m.fileList.Title = fmt.Sprintf("Remote Files: %s (by %s)%s", m.currentPath, sortModeStr, selectionStr)
 }
 
 func (m *SFTPModel) getSelectedFiles() []string {

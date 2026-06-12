@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -36,6 +37,12 @@ func (m Model) updateFilePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ok && !i.isDir {
 				m.toggleFileSelection(i.name)
 			}
+		case key.Matches(msg, m.keys.All):
+			m.selectAllFiles()
+			return m, nil
+		case key.Matches(msg, m.keys.Clear):
+			m.selectedFiles = make(map[string]struct{})
+			return m, nil
 		case key.Matches(msg, m.keys.Select):
 			if len(m.selectedFiles) > 0 {
 				m.state = optimizerListState
@@ -115,19 +122,51 @@ func (m Model) updateOutputDirInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateOptimizing(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
 	switch msg := msg.(type) {
-	case progressMsg:
-		cmd = m.progress.SetPercent(float64(msg) / 100.0)
-		return m, cmd
 	case updateStatusMsg:
 		m.statusMessage = string(msg)
 		return m, nil
-	case finishedMsg:
-		m.statusMessage = "Optimization completed! Press 'q' to quit."
-		return m, nil
+
 	case optimizationMsg:
-		return m, runOptimization(msg)
+		// Prepare the run (mkdir, parse quality) then start.
+		return m, beginOptimization(msg)
+
+	case optimizeStartedMsg:
+		m.optFiles = msg.files
+		m.optQuality = msg.quality
+		m.optOutputDir = msg.outputDir
+		m.optProcessed = 0
+		m.optSucceeded = 0
+		m.optFailed = 0
+		m.optResults = nil
+		m.optDone = false
+		if len(m.optFiles) == 0 {
+			m.optDone = true
+			m.statusMessage = "No files to optimize."
+			return m, nil
+		}
+		m.statusMessage = fmt.Sprintf("Optimizing %d files...", len(m.optFiles))
+		return m, optimizeOneCmd(m.optFiles[0], m.optQuality, m.optOutputDir)
+
+	case fileDoneMsg:
+		m.optProcessed++
+		if msg.success {
+			m.optSucceeded++
+		} else {
+			m.optFailed++
+		}
+		m.optResults = append(m.optResults, msg.result)
+
+		pct := float64(m.optProcessed) / float64(len(m.optFiles))
+		cmd := m.progress.SetPercent(pct)
+
+		if m.optProcessed >= len(m.optFiles) {
+			m.optDone = true
+			m.statusMessage = fmt.Sprintf("Done: %d optimized, %d failed. Press 'q' to quit.", m.optSucceeded, m.optFailed)
+			return m, cmd
+		}
+		m.statusMessage = fmt.Sprintf("Optimizing %d/%d...", m.optProcessed+1, len(m.optFiles))
+		return m, tea.Batch(cmd, optimizeOneCmd(m.optFiles[m.optProcessed], m.optQuality, m.optOutputDir))
 	}
 
 	progressModel, progressCmd := m.progress.Update(msg)
@@ -135,15 +174,24 @@ func (m Model) updateOptimizing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, progressCmd
 }
 
-// Messages for progress updates
-type progressMsg float64
-type finishedMsg struct{}
+// Messages for the optimization run
 type updateStatusMsg string
 
 type optimizationMsg struct {
 	selectedFiles []string
 	quality       string
 	outputDir     string
+}
+
+type optimizeStartedMsg struct {
+	files     []string
+	quality   int
+	outputDir string
+}
+
+type fileDoneMsg struct {
+	result  string
+	success bool
 }
 
 func startOptimization(m Model) tea.Cmd {

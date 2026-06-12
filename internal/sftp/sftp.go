@@ -9,12 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	pkgsftp "github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 
+	"github.com/juparave/photoptim/internal/config"
 	"github.com/juparave/photoptim/internal/remotefs"
 )
 
@@ -133,7 +136,58 @@ func (c *Client) Create(ctx context.Context, path string, overwrite bool) ( /*no
 			return nil, errors.New("file exists")
 		}
 	}
-	return c.sftpClient.Create(full)
+
+	// Write to a temp file alongside the target, then atomically rename on
+	// success. This protects the original from a partial/failed write.
+	tmp := full + ".photoptim-tmp"
+	f, err := c.sftpClient.Create(tmp)
+	if err != nil {
+		return nil, err
+	}
+	return &atomicWriteCloser{client: c.sftpClient, file: f, tmp: tmp, final: full}, nil
+}
+
+// atomicWriteCloser writes to a temp file and renames it over the final path on
+// Close. Any error before a successful rename leaves the original file intact
+// and removes the temp file.
+type atomicWriteCloser struct {
+	client *pkgsftp.Client
+	file   *pkgsftp.File
+	tmp    string
+	final  string
+	failed bool
+}
+
+func (w *atomicWriteCloser) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	if err != nil {
+		w.failed = true
+	}
+	return n, err
+}
+
+func (w *atomicWriteCloser) Close() error {
+	closeErr := w.file.Close()
+	if w.failed || closeErr != nil {
+		_ = w.client.Remove(w.tmp)
+		if closeErr != nil {
+			return closeErr
+		}
+		return errors.New("write failed; original left unchanged")
+	}
+
+	// PosixRename atomically replaces the destination; fall back to a
+	// remove+rename for servers without the posix-rename extension.
+	if err := w.client.PosixRename(w.tmp, w.final); err != nil {
+		if rmErr := w.client.Remove(w.final); rmErr == nil {
+			if rnErr := w.client.Rename(w.tmp, w.final); rnErr == nil {
+				return nil
+			}
+		}
+		_ = w.client.Remove(w.tmp)
+		return fmt.Errorf("rename temp to final: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) Join(elem ...string) string { return filepath.Join(elem...) }
@@ -155,12 +209,72 @@ func (c *Client) abs(p string) string {
 	return clean
 }
 
-// hostKeyCallback returns a callback that prompts the user (placeholder now always accepts).
+// hostKeyMu serializes appends to the known_hosts file across concurrent connects.
+var hostKeyMu sync.Mutex
+
+// hostKeyCallback verifies the server's host key against ~/.config/photoptim/known_hosts.
+//
+// On a known host it requires an exact match. On an unknown host it trusts on
+// first use (TOFU): the key is persisted and accepted. A changed key (the MITM
+// signal) is always rejected.
 func (c *Client) hostKeyCallback() gossh.HostKeyCallback {
+	path := config.ResolvePaths().KnownHosts
+
 	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
-		// TODO: implement fingerprint prompt + persistence
-		return nil
+		hostKeyMu.Lock()
+		defer hostKeyMu.Unlock()
+
+		// Ensure the file exists so knownhosts.New can open it.
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				return fmt.Errorf("create known_hosts: %w", err)
+			}
+		}
+
+		check, err := knownhosts.New(path)
+		if err != nil {
+			return fmt.Errorf("load known_hosts: %w", err)
+		}
+
+		err = check(hostname, remote, key)
+		if err == nil {
+			return nil // known and matching
+		}
+
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) {
+			// Want entries present but none matched -> key changed (possible MITM).
+			if len(keyErr.Want) > 0 {
+				return fmt.Errorf("host key mismatch for %s: %w (remove the stale entry from %s if this change is expected)", hostname, err, path)
+			}
+			// No entries for this host -> trust on first use.
+			if err := appendKnownHost(path, hostname, remote, key); err != nil {
+				return fmt.Errorf("persist host key: %w", err)
+			}
+			return nil
+		}
+
+		return err
 	}
+}
+
+// appendKnownHost appends an OpenSSH-format known_hosts line for the host.
+func appendKnownHost(path, hostname string, remote net.Addr, key gossh.PublicKey) error {
+	addrs := []string{hostname}
+	if remote != nil {
+		if ra := remote.String(); ra != "" && ra != hostname {
+			addrs = append(addrs, ra)
+		}
+	}
+	line := knownhosts.Line(addrs, key)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line + "\n")
+	return err
 }
 
 // buildAuth builds SSH auth methods (password, ssh-agent, or identity files).

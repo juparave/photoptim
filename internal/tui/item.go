@@ -55,7 +55,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		absPath, err := filepath.Abs(filepath.Join(d.model.currentPath, i.name))
 		if err == nil {
 			if _, ok := d.model.selectedFiles[absPath]; ok {
-				selectionIndicator = fmt.Sprintf(" %s ", checkedIcon)
+				selectionIndicator = fmt.Sprintf(" %s ", checkedStyle.Render(checkedIcon))
 			}
 		}
 	}

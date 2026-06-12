@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -25,6 +26,8 @@ type KeyMap struct {
 	Back   key.Binding
 	Quit   key.Binding
 	Select key.Binding
+	All    key.Binding
+	Clear  key.Binding
 }
 
 var keys = KeyMap{
@@ -52,6 +55,14 @@ var keys = KeyMap{
 		key.WithKeys("s"),
 		key.WithHelp("s", "proceed to optimization"),
 	),
+	All: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "select all"),
+	),
+	Clear: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "clear selection"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q/ctrl+c", "quit"),
@@ -59,12 +70,13 @@ var keys = KeyMap{
 }
 
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Space, k.Select, k.Quit}
+	return []key.Binding{k.Space, k.All, k.Clear, k.Select, k.Quit}
 }
 
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Space},
+		{k.Up, k.Down, k.Enter},
+		{k.Space, k.All, k.Clear},
 		{k.Select, k.Back, k.Quit},
 	}
 }
@@ -84,6 +96,16 @@ type Model struct {
 	selectedFiles  map[string]struct{}
 	currentPath    string
 	width, height  int
+
+	// Optimization run state
+	optQuality   int
+	optOutputDir string
+	optFiles     []string
+	optProcessed int
+	optSucceeded int
+	optFailed    int
+	optResults   []string
+	optDone      bool
 }
 
 type state int
@@ -218,11 +240,29 @@ func (m Model) View() string {
 			m.outputDirInput.View(),
 		)
 	case optimizingState:
+		header := "Optimizing images..."
+		if m.optDone {
+			header = "Optimization complete"
+		}
+		var results string
+		if len(m.optResults) > 0 {
+			start := 0
+			if len(m.optResults) > 5 {
+				start = len(m.optResults) - 5
+			}
+			var b strings.Builder
+			b.WriteString("\n\nRecent results:\n")
+			for i := start; i < len(m.optResults); i++ {
+				fmt.Fprintf(&b, "  %s\n", m.optResults[i])
+			}
+			results = b.String()
+		}
 		content = fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			headerStyle.Render("Optimizing images..."),
+			"%s\n\n%s\n\n%s%s",
+			headerStyle.Render(header),
 			m.progress.View(),
 			statusStyle.Render(m.statusMessage),
+			results,
 		)
 	}
 
@@ -262,6 +302,19 @@ func (m Model) getSelectedFiles() []string {
 		files = append(files, file)
 	}
 	return files
+}
+
+// selectAllFiles selects every non-directory file in the current view.
+func (m *Model) selectAllFiles() {
+	for _, listItem := range m.fileList.Items() {
+		it, ok := listItem.(item)
+		if !ok || it.isDir {
+			continue
+		}
+		if absPath, err := filepath.Abs(filepath.Join(m.currentPath, it.name)); err == nil {
+			m.selectedFiles[absPath] = struct{}{}
+		}
+	}
 }
 
 func (m *Model) toggleFileSelection(path string) {
