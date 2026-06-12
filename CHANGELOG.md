@@ -4,6 +4,29 @@ All notable changes to Photoptim will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- SFTP host key verification against `~/.config/photoptim/known_hosts`
+  (trust-on-first-use; rejects changed keys).
+- Atomic remote writes: optimized files are written to a temp file and renamed
+  over the original, so a failed transfer leaves the original intact.
+- SFTP browser: adjustable JPEG quality (`+`/`-`), select-all (`a`) and clear
+  (`c`), and large-file (≥10 MB) highlighting.
+- Local TUI: select-all (`a`) / clear (`c`), per-file progress, rolling result
+  list, and explicit reporting of unsupported files.
+
+### Fixed
+- SFTP error screen no longer swallows the keystroke used to dismiss it; Ctrl+C
+  always quits.
+- Local TUI progress bar now advances per file instead of jumping straight to
+  done.
+- Surface the final write/rename error from the SFTP and pipeline upload paths
+  instead of reporting false success.
+
+### Docs
+- Rewrote `TUI_USAGE.md` to match the implemented behavior (the previous version
+  documented many unimplemented features). Corrected the SFTP launch command in
+  `README.md` (`photoptim sftp`, not `sftp-tui`).
+
 ## [v0.1.1] - 2025-08-27
 
 ### Fixed

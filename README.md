@@ -112,11 +112,15 @@ go run cmd/tui/main.go
 **2. SFTP TUI:**
 For browsing and optimizing remote images over SFTP.
 ```bash
-go run cmd/photoptim/main.go sftp-tui
+go run cmd/photoptim/main.go sftp
 # Or if built:
-./photoptim sftp-tui
+./photoptim sftp
 ```
-*Features include: Remote directory browsing, multi-select optimization, and real-time result feedback.*
+*Features include: remote directory browsing, multi-select optimization
+(select-all / clear), adjustable quality and resize presets, and real-time
+result feedback. Server host keys are verified (trust-on-first-use) against
+`~/.config/photoptim/known_hosts`, and optimized files are written back
+atomically so a failed transfer never corrupts the original.*
 
 For detailed usage, check out the [TUI Usage Guide](TUI_USAGE.md) and [SFTP Extension Guide](SFTP_EXTENSION_PRD.md).
 

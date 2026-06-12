@@ -1,6 +1,8 @@
-## Photoptim TUI Usage Guide
+# Photoptim TUI Usage Guide
 
-This guide describes how to use the local file optimization TUI and the new SFTP workflow.
+This guide describes the two interactive terminal interfaces: the **local** file
+optimization TUI and the **SFTP** remote optimization TUI. It reflects the
+behavior actually implemented in the code.
 
 ---
 
@@ -9,39 +11,41 @@ This guide describes how to use the local file optimization TUI and the new SFTP
 ### Launch
 
 ```
-./photoptim-tui
+photoptim-tui
 ```
 
 ### Workflow
-1. File Picker Screen
-	- Arrow keys navigate directories / files.
-	- Enter selects an image (e.g. `testdata/sample.jpg`).
-	- Allowed extensions: `.jpg`, `.jpeg`, `.png`.
-2. Optimization Mode Selection
-	- Choose: Single Image Optimization or Batch Optimization.
-	- Enter to confirm.
-3. Quality Input
-	- Enter JPEG quality (1–100). Default 80.
-4. Output Directory
-	- Provide output directory name (e.g. `optimized`). Created if missing.
-5. Optimization Progress
-	- Progress bar updates.
-	- Status messages show current step.
-	- Press `q` (or `ctrl+c`) to quit after completion.
+1. **File Picker** — browse the current directory tree and select images.
+2. **Mode Selection** — choose the optimization mode (Batch Optimization).
+3. **Quality Input** — enter JPEG quality (1–100, default 80).
+4. **Output Directory** — name of the output directory (created if missing).
+5. **Progress** — a progress bar advances per file, and the last few results are
+   listed. A summary (`N optimized, M failed`) is shown on completion.
+
+Supported input formats: `.jpg`, `.jpeg`, `.png`. Files with any other
+extension are skipped and reported as `⊘ unsupported format`.
 
 ### Keybindings (Local Mode)
 | Key | Action |
 |-----|--------|
-| ↑/↓ / ←/→ | Navigate / move focus |
-| Enter | Confirm selection / next step |
-| Esc | Go back one step |
+| ↑/k, ↓/j | Move up / down |
+| Enter | Open directory / toggle file selection |
+| Space | Toggle file selection |
+| a | Select all files in the current directory |
+| c | Clear selection |
+| s | Proceed to optimization |
+| Esc / Backspace | Go back one step / up a directory |
 | q / Ctrl+C | Quit |
+
+> Note: while typing in the quality or output-directory fields, `q` is treated
+> as text; use Ctrl+C to quit from those screens.
 
 ---
 
-## SFTP Optimization TUI (New)
+## SFTP Optimization TUI
 
-The SFTP workflow lets you connect to a remote server, browse images, optimize them locally, and upload optimized versions back (overwriting originals unless skipped/failed). Requires an SSH-accessible host and key/password credentials.
+The SFTP workflow connects to a remote server, browses images, optimizes them,
+and writes the optimized version back **in place** (atomically — see below).
 
 ### Launch
 
@@ -50,115 +54,98 @@ photoptim sftp
 ```
 
 ### Connection Screen
-Fields:
+Fields (navigate with Tab / Shift+Tab / ↑ / ↓):
+
 | Field | Description |
 |-------|-------------|
 | Host | Remote hostname or IP |
 | Port | Defaults to 22 |
 | User | SSH username |
-| Remote Path | Initial working directory (chroot root) |
-| Key (optional) | Path to private key; agent used automatically if available |
-| Password (fallback) | Only used if agent / key auth fails |
+| Pass | Password, or passphrase for an encrypted key (fallback) |
+| Key  | Path to a private key (e.g. `~/.ssh/id_rsa`); optional |
+| Path | Initial remote directory; blank uses the login home directory |
 
-Actions:
-* Enter: attempt connection.
-* On first connect to unknown host, fingerprint prompt is shown (accept / reject).
+Authentication is attempted in this order:
+1. **ssh-agent** (if `SSH_AUTH_SOCK` is set)
+2. **Identity files** — the `Key` field if provided, otherwise the common
+   defaults `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`
+3. **Password** (fallback)
+
+Move focus to `[ Connect ]` and press Enter to connect.
+
+#### Host key verification
+Server host keys are verified against
+`$XDG_CONFIG_HOME/photoptim/known_hosts` (default `~/.config/photoptim/known_hosts`):
+
+- **First connection to a host** — trust on first use: the key is recorded and
+  accepted automatically.
+- **Subsequent connections** — the key must match the recorded one.
+- **Changed key** — the connection is rejected (possible man-in-the-middle). If
+  the change is expected, remove the stale line for that host from the
+  `known_hosts` file and reconnect.
 
 ### Browser Screen
-Shows remote directory (chrooted to initial path):
-* Hidden (dot) files excluded.
-* Symlinks followed only if target remains within chroot.
-* Hard cap: if >1000 entries, a gating message appears—apply a size filter to reduce set.
+Lists the current remote directory (dot files are hidden). Directories are shown
+first; files ≥ 10 MB are highlighted. The footer shows the current Quality and
+Resize settings.
 
-Columns:
-| Name | Size | Type | Modified |
-
-Filtering:
-* Size threshold input (supports values like `500KB`, `2MB`). Inclusive (>=).
-* 400ms debounce before list refilters.
-
-Selection:
-* Space: toggle file selection.
-* A: select all (current filtered set <=1000).
-* N: deselect all.
-* ⚠ indicates unusual filename (spaces or non-ASCII); press `R` to rename before optimization/upload.
-
-### Selection Screen
-* Displays chosen files count.
-* Proceed to configuration (quality / concurrency) or adjust selection.
-
-### Optimization Configuration Screen
-| Setting | Description |
-|---------|-------------|
-| JPEG Quality | Slider/input 1–100 (PNG uses lossless recompress) |
-| Concurrency | Worker count (default 4, env `PHOTOPTIM_CONCURRENCY`) |
-| Size Threshold | Optional override applied retroactively |
-| Keep Temp | Retain temp dirs after finishing |
-| Audit Log | Enable JSON audit (savings per file) |
-
-### Progress Screen
-Displays:
-* Overall progress bar.
-* Per-file stacked bars (Download / Optimize / Upload) with byte-level progress for download/upload.
-* Counters: Completed | Skipped | Failed | Savings.
-* Verbose log pane (toggle `V`).
-
-Cancellation:
-* Ctrl+X: hard cancel (in-flight file aborted; partial temp deleted). Summary shown.
-
-### Results Screen
-* Table: Name | Original | Optimized | Savings % | Status.
-* Actions: Retry Failed, Retry Selected, Export Audit Path, Return to Browser.
-* Failed entries show reason (hover/expand in verbose mode).
-
-### Batch Mode (Non-TUI)
-Run directly via flags for automation:
-```
-photoptim sftp --batch \
-  --host example.com --user alice --remote-path /photos \
-  --quality 80 --size-threshold 500KB --concurrency 6 --audit
-```
-Exit codes:
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 3 | Zero optimizable files |
-| 4 | Partial failures |
-| 5 | Connection/auth failure |
-| 6 | Internal pipeline error |
-
-### Keybindings (SFTP Mode Summary)
 | Key | Action |
 |-----|--------|
-| Arrow Keys | Navigate lists / fields |
-| Enter | Confirm / advance |
-| Esc | Back |
-| Space | Toggle selection |
-| A | Select all (<=1000) |
-| N | Deselect all |
-| R | Rename highlighted file |
-| V | Toggle verbose log pane |
-| Ctrl+L | Refresh / invalidate cache |
-| Ctrl+X | Cancel processing (Progress screen) |
-| Ctrl+C / q | Quit |
+| ↑ / ↓ | Move selection |
+| Enter | Open directory, or (if files are selected) start optimization |
+| Space | Toggle file selection |
+| a | Select all files in the current directory |
+| c | Clear selection |
+| +/- | Increase / decrease JPEG quality (steps of 5, 1–100) |
+| r | Cycle resize preset (Disabled → device presets → …) |
+| s | Toggle sort (name ⇄ size) |
+| Backspace / ← | Go up one directory |
+| q / Ctrl+C | Quit |
 
-### Notes
-* Tiny images (<15KB) skipped automatically (reported in results).
-* Unsupported formats skipped with reason.
-* PNG optimization requires libvips (`bimg`); absence results in skip with warning.
-* Host fingerprints stored under `$XDG_CONFIG_HOME/photoptim/known_hosts`.
-* Cache TTL default 2 minutes; refresh with Ctrl+L.
+Resize presets include Disabled, iPhone / Samsung / Pixel / iPad sizes, and
+Full HD / 2K / 4K. When a preset other than Disabled is active, images are
+resized (preserving aspect ratio) before re-encoding.
+
+### Optimization
+On Enter with one or more files selected, each selected file is processed
+sequentially:
+
+1. Downloaded into memory.
+2. Re-encoded (JPEG at the chosen quality; PNG re-encoded losslessly) and
+   optionally resized.
+3. Written back to the **same remote path**.
+
+Remote writes are **atomic**: the optimized data is written to a temporary file
+alongside the original and then renamed over it on success. If the write or
+rename fails, the temporary file is removed and the **original is left
+unchanged**.
+
+A file is skipped (and reported) when:
+- its extension is not `.jpg`, `.jpeg`, or `.png`, or
+- the optimized result would not be smaller than the original
+  (`original is already optimal`).
+
+Progress is shown with an overall bar and the most recent results. On
+completion a summary (`N optimized, M failed`) is displayed and the listing is
+refreshed.
+
+### Batch Mode (Non-Interactive)
+> **Status:** not yet implemented. `photoptim sftp --batch --host … --user …`
+> currently only verifies connectivity and exits; it does not run the
+> optimization pipeline. Use the interactive TUI for remote optimization.
 
 ---
 
 ## Troubleshooting
 | Symptom | Resolution |
 |---------|------------|
-| PNGs all skipped | Install libvips; reinstall or rebuild binary with CGO enabled if needed |
-| Large directory gated | Apply a size threshold or navigate deeper to reduce entries ≤1000 |
-| Connection fails | Verify SSH key permissions and host/port; check known_hosts fingerprint changes |
-| No files optimized (exit code 3) | Adjust size threshold or ensure supported extensions present |
+| `host key mismatch` on connect | If the change is expected, remove the host's line from `~/.config/photoptim/known_hosts` and reconnect. |
+| `no auth methods available` | Start ssh-agent, ensure a default key exists in `~/.ssh`, or supply a key path / password. |
+| Connection fails | Verify host, port, username, and key permissions. |
+| File reported `already optimal` | The current encoding is already at or below the target size; nothing is written. |
+| Format skipped | Only `.jpg`, `.jpeg`, and `.png` are supported. |
 
 ---
 
-The TUI provides an interactive way to optimize images locally and remotely without memorizing detailed CLI options.
+The TUI provides an interactive way to optimize images locally and remotely
+without memorizing CLI options.
